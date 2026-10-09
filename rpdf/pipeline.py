@@ -49,14 +49,14 @@ class Context:
 
 
 def run_isolated(project, command, ctx):
-    """Run a WeasyPrint step (`build` or `detect`) as `rulebook_pdf.py <command>` in a child process,
+    """Run a WeasyPrint step (`build` or `detect`) as `illuminator.py <command>` in a child process,
     streaming its output to the log. Returns the last output line."""
     import subprocess
     import sys
     from pathlib import Path
 
     project.save()
-    script = Path(__file__).resolve().parent.parent / "rulebook_pdf.py"
+    script = Path(__file__).resolve().parent.parent / "illuminator.py"
     proc = subprocess.Popen([sys.executable, "-u", str(script), command, str(project.root)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     last = ""

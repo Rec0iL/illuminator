@@ -1,37 +1,37 @@
-# Rulebook PDF
+# Illuminator
 
-Macht aus einem Regelwerk (Markdown, Word, PDF oder Text) ein illustriertes PDF im Stil eines gedruckten Regelbuchs: Cover, Kapitel-Banner, ein Bild pro Abschnitt, zweispaltiger Satz, Kopfzeilen und Seitenzahlen.
+Macht aus einem Regelwerk oder Dokument (Markdown, Word, PDF oder Text) ein illustriertes PDF im Stil eines gedruckten Buchs: Cover, Kapitel-Banner, ein Bild pro Abschnitt, zweispaltiger Satz, Kopfzeilen und Seitenzahlen. Die Bilder erzeugt eine KI, passend zum Inhalt der jeweiligen Abschnitte.
 
 ```
-Regelwerk ──► Prompts (agy / Gemini) ──► Bilder (ComfyUI) ──► PDF (WeasyPrint)
+Text ──► Prompts (agy) ──► Bilder (agy | Gemini API | ComfyUI) ──► PDF (WeasyPrint)
 ```
 
-Die Bild-Prompts schreibt **agy** (Antigravity CLI) statt Claude, das spart Claude-Tokens. agy bekommt dabei nur Text und gibt JSON zurück; es läuft in einem leeren Temp-Ordner und erhält keine Datei- oder Shell-Rechte.
+Die Bild-Prompts schreibt **agy** (Antigravity CLI). agy bekommt dabei nur Text und gibt JSON zurück; es läuft in einem leeren Temp-Ordner und erhält keine Datei- oder Shell-Rechte. Die Bilder selbst erzeugt standardmäßig ebenfalls agy (eingebautes Bildwerkzeug, kein API-Key nötig), alternativ die Gemini API oder ein lokales ComfyUI, siehe „Engines für Bilder“.
 
 ## Voraussetzungen
 
+- Python 3.10+ mit `pip install -r requirements.txt` (PySide6, markdown, WeasyPrint, Pillow; `google-genai` nur für die Gemini-API-Engine)
 - Einmalig die Schriften laden (nicht im Repo): `python3 fetch_fonts.py` (Google Fonts, SIL OFL)
-- Python 3.10+ mit `pip install -r requirements.txt` (PySide6, markdown, WeasyPrint, Pillow)
 - [agy](https://antigravity.google) im `PATH`, angemeldet
-- ComfyUI (z.B. über Pinokio) mit einem Bildmodell, Standard: `http://127.0.0.1:8188`
+- Nur für die Engine ComfyUI: ComfyUI (z.B. über Pinokio) mit einem Bildmodell, Standard: `http://127.0.0.1:8188`
 - Für PDF-Import: `pdftotext` (Paket poppler-utils)
 
 ## Start
 
 ```bash
-python3 tools/rulebook-pdf/rulebook_pdf.py gui
+python3 illuminator.py gui
 ```
 
 Ohne Argument öffnet die Oberfläche das zuletzt benutzte Projekt. **Letzte Projekte** (neben „Neues Projekt…“) listet die zehn zuletzt geöffneten Projekte.
 
-Bilder im Markdown mit relativem Pfad (z.B. `docs/screenshots/x.png`) werden zuerst neben der Quelldatei gesucht, dann im Projektordner `bilder/` und im Projektordner selbst, jeweils mit Pfad und nur mit Dateiname. Nicht gefundene Bilder meldet der Build als „WARNUNG: Bild nicht gefunden“. Das KINETIK-Projekt liegt unter `assets/pdf/`.
+Bilder im Markdown mit relativem Pfad (z.B. `docs/screenshots/x.png`) werden zuerst neben der Quelldatei gesucht, dann im Projektordner `bilder/` und im Projektordner selbst, jeweils mit Pfad und nur mit Dateiname. Nicht gefundene Bilder meldet der Build als „WARNUNG: Bild nicht gefunden“.
 
 ## Ablauf in der Oberfläche
 
-1. **Neues Projekt…**: Regelwerk wählen (`.md`, `.docx`, `.pdf`, `.txt`) und einen leeren Projektordner. Word-Dateien werden lokal über ihre Überschriftenstile umgewandelt, PDF und Text abschnittsweise von agy (Wortlaut bleibt erhalten). Die Überschriften-Ebenen richtet das Tool danach am Original aus: Kapitel sind die Einträge der ersten Ebene im Inhaltsverzeichnis (Word-Stil mit Punktlinien und Seitenzahlen); Teile vor dem ersten solchen Kapitel, die in der größten Schrift gesetzt sind, werden ebenfalls Kapitel. Darunter ergeben die Schriftgrößen der Überschriften die Ebenen, und ein Untertitel in derselben Zeile wird mit seiner Überschrift zusammengeführt. Das Verzeichnis selbst landet nicht im Text. Für ein bereits importiertes Projekt: `rulebook_pdf.py restructure PROJEKT ORIGINAL.pdf` (Sicherung `*.vor-restructure.md`, Bilder von Plätzen, die nur zwischen Kapitel und Abschnitt wechseln, werden mitgenommen). **Das erzeugte Markdown kurz prüfen** (Toolbar: „Quelle öffnen“), vor allem bei PDFs.
+1. **Neues Projekt…**: Regelwerk wählen (`.md`, `.docx`, `.pdf`, `.txt`) und einen leeren Projektordner. Word-Dateien werden lokal über ihre Überschriftenstile umgewandelt, PDF und Text abschnittsweise von agy (Wortlaut bleibt erhalten). Die Überschriften-Ebenen richtet das Tool danach am Original aus: Kapitel sind die Einträge der ersten Ebene im Inhaltsverzeichnis (Word-Stil mit Punktlinien und Seitenzahlen); Teile vor dem ersten solchen Kapitel, die in der größten Schrift gesetzt sind, werden ebenfalls Kapitel. Darunter ergeben die Schriftgrößen der Überschriften die Ebenen, und ein Untertitel in derselben Zeile wird mit seiner Überschrift zusammengeführt. Das Verzeichnis selbst landet nicht im Text. Für ein bereits importiertes Projekt: `illuminator.py restructure PROJEKT ORIGINAL.pdf` (Sicherung `*.vor-restructure.md`, Bilder von Plätzen, die nur zwischen Kapitel und Abschnitt wechseln, werden mitgenommen). **Das erzeugte Markdown kurz prüfen** (Toolbar: „Quelle öffnen“), vor allem bei PDFs.
 2. **Buch**: oben der Schalter **Inhalt** (PnP-Regelwerk / Anderes Dokument, siehe „Inhaltstyp“). Titel, Untertitel, Kicker, Tagline, Kopfzeile, Kapitel-Label, Farben, Schriftgröße, Blocksatz. „Alles automatisch ausfüllen (agy)“ liest den Anfang des Regelwerks und schlägt alle Cover- und Kopfzeilentexte in der Sprache des Buches vor (vorhandene Einträge werden nach Rückfrage ersetzt).
 3. **Stil**: Vorlage wählen (Anime Action, Film Noir, Dark Fantasy, Comic …) oder einen freien **Stilwunsch** eintragen, z.B. „soll aussehen wie One Piece“, und **Mit agy verfeinern**. agy macht daraus einen Stil-Suffix, den das gewählte Bildmodell versteht, und schlägt passende Akzentfarben vor. Der Suffix bleibt editierbar. **Komprimieren** neben jedem Feld lässt agy Doppeltes, Widersprüche, Füllwörter und für das gewählte Modell wirkungslose Begriffe entfernen (bei Krea 2 z.B. „masterpiece, best quality“). Was entfernt wurde, steht im Log. **Vorschlagen** daneben lässt agy das Feld (Welt/Thema, Stilwunsch, Stil-Suffix, Negativ-Prompt) aus dem Buch, den anderen Feldern und dem Bildmodell vorschlagen; ein vorhandener Text wird erst nach Rückfrage ersetzt. Der Negativ-Vorschlag lässt Begriffe weg, die dem gewählten Stil widersprechen (bei Pixel Art z.B. „pixelated“, „lowres“).
-4. **Engine**: agy-Modell und ComfyUI. „Verbinden“ lädt die Modelle aus dem laufenden ComfyUI. Unter **Bildmodell** stehen alle Modelle mit ihrer erkannten Bauart, die Einstellungen werden beim Auswählen automatisch gesetzt (siehe „Bildmodelle“).
+4. **Engine**: agy-Modell für die Prompts und die **Bild-Engine** (agy, Gemini API oder ComfyUI). Bei ComfyUI lädt „Verbinden“ die Modelle aus dem laufenden ComfyUI; unter **Bildmodell** stehen alle Modelle mit ihrer erkannten Bauart, die Einstellungen werden beim Auswählen automatisch gesetzt (siehe „Bildmodelle“). Bei agy und Gemini gibt es kaum etwas einzustellen.
 5. **① Prompts planen**: agy liest das Regelwerk, beschreibt Welt und Genre und schreibt für jeden Bildplatz ein Motiv. Ohne gesetzten Stil schlägt agy auch Stil und Farben vor.
 6. **② Fehlende Bilder**: generiert alle Bilder, die noch fehlen. Mit **Bild entfernen** (unter dem Prompt-Feld; mehrere Bilder mit Strg/Umschalt-Klick in der Liste markieren) nimmst du Bilder heraus, mit denen du nicht zufrieden bist: Die Datei wandert nach `.build/removed/`, der Prompt bleibt, der Platz bekommt einen neuen Seed (sonst käme dasselbe Bild wieder), und „Fehlende Bilder“ erzeugt ihn neu. Im Dialog gibt es dafür auch „Entfernen und neu generieren“.
 7. **③ PDF bauen**.
@@ -53,15 +53,15 @@ Ein Bild passt nicht? Wunsch eintragen → Analysieren → Vorschau → Überneh
 
 ### Füllbilder für Leerraum
 
-Kurze Abschnitte hinterlassen am Seitenende oft eine Lücke, weil der nächste Block aus Überschrift und Bild nicht mehr passt. Mit **Buch → Leerraum mit Füllbildern füllen** setzt das Tool das PDF zuerst probeweise, misst jede Lücke ab der eingestellten Höhe (Standard 55 mm) und legt dafür einen Bildplatz `fill-…` an. Das gilt nur für Lücken nach einem Abschnitt, der auf dieser Seite endet. agy schreibt ein zweites, anderes Motiv zum selben Abschnitt, ComfyUI erzeugt es im Seitenverhältnis der Lücke, und beim Bauen füllt es genau diesen Platz. Die übrige Seitenaufteilung bleibt gleich.
+Kurze Abschnitte hinterlassen am Seitenende oft eine Lücke, weil der nächste Block aus Überschrift und Bild nicht mehr passt. Mit **Buch → Leerraum mit Füllbildern füllen** setzt das Tool das PDF zuerst probeweise, misst jede Lücke ab der eingestellten Höhe (Standard 55 mm) und legt dafür einen Bildplatz `fill-…` an. Das gilt nur für Lücken nach einem Abschnitt, der auf dieser Seite endet. agy schreibt ein zweites, anderes Motiv zum selben Abschnitt, die Bild-Engine erzeugt es im Seitenverhältnis der Lücke, und beim Bauen füllt es genau diesen Platz. Die übrige Seitenaufteilung bleibt gleich.
 
 Ändert sich der Text, verschieben sich die Lücken: Füllbilder ohne Lücke werden einfach nicht mehr eingesetzt, neue Lücken bekommen beim nächsten „Prompts planen“ / „Fehlende Bilder“ ein eigenes Bild.
 
 ### Bildkontrolle mit agy (optional)
 
-**Engine → Generierte Bilder automatisch prüfen**: Nach jedem generierten Bild sieht sich agy das Bild an und beurteilt Motiv, Textartefakte, Anatomie und ob es zur Welt passt. Mit **Unpassende Bilder neu generieren** schreibt agy bei einem Fehlschlag einen besseren Prompt, und das Bild wird mit neuem Seed neu erzeugt. „Bilder prüfen (agy)“ prüft alle vorhandenen Bilder, „Prüfen“ beim einzelnen Bild nur dieses. Das Ergebnis steht am Bild (✓ / ✗ mit den gefundenen Problemen).
+**Engine → Generierte Bilder automatisch prüfen**: Nach jedem generierten Bild sieht sich agy das Bild an und beurteilt Motiv, Textartefakte, Anatomie und ob es zur Welt passt. Mit **Unpassende Bilder korrigieren** schreibt agy bei einem Fehlschlag einen besseren Prompt, und das Bild wird mit neuem Seed neu erzeugt (nur ComfyUI; bei agy und Gemini wird das Bild stattdessen bearbeitet, siehe „Engines für Bilder“). „Bilder prüfen (agy)“ prüft alle vorhandenen Bilder, „Prüfen“ beim einzelnen Bild nur dieses. Das Ergebnis steht am Bild (✓ / ✗ mit den gefundenen Problemen).
 
-**Neuversuche** legt fest, wie oft ein unpassendes Bild mit einem verbesserten, ähnlichen Prompt neu erzeugt wird (bis zu 3). Der Schalter **Nach 3 Fehlversuchen Konzept radikal neu (bis zu 3×3 Bilder)** erweitert das: Pro Konzept entstehen bis zu 3 Bilder, die beiden letzten mit jeweils verfeinertem Prompt. Passt keins, schreibt agy den Prompt von Grund auf neu. Es kennt die bereits gescheiterten Konzepte samt ihren Problemen und muss ein anderes Hauptmotiv, einen anderen Ort und eine andere Perspektive wählen, die weiter zum Abschnitt passen. Höchstens 3 Konzepte mit je 3 Bildern, also 9 Bilder pro Platz; sobald eins passt, ist Schluss. Die Zahl der Neuversuche gilt in diesem Modus nicht. Das Log zeigt „Konzept 2/3, Bild 1/3“. Das Ergebnis des letzten Versuchs bleibt als Bild stehen, auch wenn keins gepasst hat.
+Die folgenden Absätze zu Neuversuchen und Konzepten gelten für die Engine ComfyUI. **Neuversuche** legt fest, wie oft ein unpassendes Bild mit einem verbesserten, ähnlichen Prompt neu erzeugt wird (bis zu 3). Der Schalter **Nach 3 Fehlversuchen Konzept radikal neu (bis zu 3×3 Bilder)** erweitert das: Pro Konzept entstehen bis zu 3 Bilder, die beiden letzten mit jeweils verfeinertem Prompt. Passt keins, schreibt agy den Prompt von Grund auf neu. Es kennt die bereits gescheiterten Konzepte samt ihren Problemen und muss ein anderes Hauptmotiv, einen anderen Ort und eine andere Perspektive wählen, die weiter zum Abschnitt passen. Höchstens 3 Konzepte mit je 3 Bildern, also 9 Bilder pro Platz; sobald eins passt, ist Schluss. Die Zahl der Neuversuche gilt in diesem Modus nicht. Das Log zeigt „Konzept 2/3, Bild 1/3“. Das Ergebnis des letzten Versuchs bleibt als Bild stehen, auch wenn keins gepasst hat.
 
 agy bekommt Bilder nur als Datei (im Headless-Modus nimmt es nur Text an). Das Tool legt deshalb für jedes Bild einen Ordner `.build/qc/<bildplatz>/` an, in dem nur eine verkleinerte Kopie liegt. Dort startet es agy mit `--sandbox` und **ohne** `--dangerously-skip-permissions`. agy darf also nichts ausführen oder schreiben, ohne dass eine Freigabe greift. Lesen kann agy die Kopie, weil der Ordner in einem seiner vertrauenswürdigen Arbeitsbereiche liegt:
 
@@ -97,9 +97,9 @@ Bilder, die im Markdown stehen (`![Bildunterschrift](pfad/bild.svg)`), übernimm
 
 Beim Import fremder Regelwerke bleiben deren Bilder erhalten: Word-Bilder landen in `media/` und stehen an ihrer Stelle im Markdown. Aus PDFs werden größere Bilder (ab 200 px) seitenweise extrahiert und am Ende ihrer Seite eingefügt. Dabei können Deko-Elemente mitkommen, deshalb `media/` und das Markdown kurz prüfen.
 
-## Bildmodelle
+## Bildmodelle (ComfyUI)
 
-Unter **Engine → Bildmodell** listet das Tool alle Modelle aus ComfyUI und erkennt ihre Bauart am Dateikopf (Namen der Tensoren, nicht am Dateinamen). Beim Auswählen setzt es Workflow, Text-Encoder, VAE, Steps, CFG, Sampler und Scheduler. Was du danach unter „Feinabstimmung“ änderst, merkt es sich pro Modelldatei (`~/.config/rulebook-pdf/models.json`, gilt für alle Projekte). **Empfohlene Werte** setzt wieder auf die Vorgaben zurück.
+Unter **Engine → Bildmodell** listet das Tool alle Modelle aus ComfyUI und erkennt ihre Bauart am Dateikopf (Namen der Tensoren, nicht am Dateinamen). Beim Auswählen setzt es Workflow, Text-Encoder, VAE, Steps, CFG, Sampler und Scheduler. Was du danach unter „Feinabstimmung“ änderst, merkt es sich pro Modelldatei (`~/.config/illuminator/models.json`, gilt für alle Projekte). **Empfohlene Werte** setzt wieder auf die Vorgaben zurück.
 
 | Bauart | Workflow | Vorgaben | Hinweis |
 |---|---|---|---|
@@ -128,13 +128,13 @@ Beim eigenen Workflow setzt das Tool Prompt, Negativ-Prompt, Seed und Bildgröß
 ## Kommandozeile
 
 ```bash
-python3 rulebook_pdf.py new    PROJEKT QUELLE    # Projekt anlegen (importiert docx/pdf/txt)
-python3 rulebook_pdf.py plan   PROJEKT [--force] # Prompts schreiben (--force: alle neu)
-python3 rulebook_pdf.py images PROJEKT [--all]   # fehlende Bilder (--all: alle neu)
-python3 rulebook_pdf.py check  PROJEKT [--no-fix]  # Bilder mit agy prüfen (--no-fix: nur prüfen)
-python3 rulebook_pdf.py restructure PROJEKT ORIGINAL.pdf  # Überschriften-Ebenen nach dem Original richten
-python3 rulebook_pdf.py build  PROJEKT           # PDF setzen
-python3 rulebook_pdf.py all    PROJEKT           # plan + images + build
+python3 illuminator.py new    PROJEKT QUELLE    # Projekt anlegen (importiert docx/pdf/txt)
+python3 illuminator.py plan   PROJEKT [--force] # Prompts schreiben (--force: alle neu)
+python3 illuminator.py images PROJEKT [--all]   # fehlende Bilder (--all: alle neu)
+python3 illuminator.py check  PROJEKT [--no-fix]  # Bilder mit agy prüfen (--no-fix: nur prüfen)
+python3 illuminator.py restructure PROJEKT ORIGINAL.pdf  # Überschriften-Ebenen nach dem Original richten
+python3 illuminator.py build  PROJEKT           # PDF setzen
+python3 illuminator.py all    PROJEKT           # plan + images + build
 ```
 
 ## Projektordner
@@ -169,7 +169,7 @@ Bildplatz-Schlüssel entstehen aus den Überschriften (`ch-…` für Kapitel, `s
 - agy-Aufrufe laufen nacheinander. Parallel gestartete agy-Läufe stören sich gegenseitig und liefern leere Antworten. Fehlende Prompts fragt das Tool einmal nach.
 - WeasyPrint malt `@page`-Hintergrundbilder nur im Satzspiegel; die Seitentextur ist deshalb ein fixiertes Element, das auf jeder Seite wiederholt wird.
 - WeasyPrint kann einen zweispaltigen Block nicht umbrechen, wenn darin ein unteilbares Element steckt, das in keine Spalte der Seite mehr passt; es schiebt dann den ganzen Abschnitt weiter. Abbildungen in Spalten sind deshalb auf 100 mm Höhe begrenzt. Hohe Grafiken besser mitten in einen Abschnitt setzen als an seinen Anfang.
-- Schriften (Bebas Neue, Oswald, Barlow) liegen in `rpdf/fonts/` (SIL Open Font License).
+- Schriften (Bebas Neue, Oswald, Barlow, Noto Emoji) lädt `fetch_fonts.py` nach `rpdf/fonts/` (Google Fonts, SIL Open Font License); sie sind nicht im Repo.
 
 ## Engines für Bilder
 
@@ -181,6 +181,6 @@ Bildplatz-Schlüssel entstehen aus den Überschriften (`ch-…` für Kapitel, `s
 
 Für `agy` und `gemini` gilt:
 - Formate kommen nur als 1:1, 16:9, 9:16, 4:3, 3:4; das Tool wählt das nächste und schneidet mittig auf die Zielgröße zu (breite Banner verlieren etwas Höhe). Kein Seed, kein Negativ-Prompt (Negatives werden als „Do not include …“ angehängt).
-- `rulebook_pdf.py edit PROJEKT KEY "Anweisung"` ändert ein vorhandenes Bild, statt es neu zu erzeugen.
+- `illuminator.py edit PROJEKT KEY "Anweisung"` ändert ein vorhandenes Bild, statt es neu zu erzeugen.
 - Bildkontrolle (QC): 1 Generierung + höchstens 2 Bearbeitungen desselben Bildes (nur die gefundenen Probleme), danach keine weiteren Änderungen. Die Konzept-/Neu-Generieren-Schleife gilt nur für ComfyUI.
-- Die Oberfläche (gui) hat noch keinen Engine-Schalter; die Engine wird in `project.json` gesetzt.
+- Die Engine wählst du in der Oberfläche unter **Engine → Bild-Engine** (oder in `project.json`).

@@ -1,7 +1,7 @@
 """Style presets: an image-prompt suffix plus matching layout accent colors."""
 
 PRESETS = {
-    "Anime Action (KINETIK)": {
+    "Anime Action": {
         "style": "cinematic anime action illustration, rain-soaked neon city, dark gritty atmosphere, "
                  "bold inked linework, cel shading, extreme high contrast, magenta and cyan rim light, "
                  "wide cinematic composition, masterpiece, best quality",

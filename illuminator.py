@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""rulebook-pdf: illustrated PDFs from Markdown rulebooks.
+"""Illuminator: illustrated PDFs from Markdown rulebooks and documents.
 
-  python3 rulebook_pdf.py gui [PROJEKT]              Oberfläche starten
-  python3 rulebook_pdf.py new PROJEKT QUELLE          Projekt anlegen (md, docx, pdf, txt), --type document für Readme/Tutorial
-  python3 rulebook_pdf.py plan PROJEKT [--force]      Bild-Prompts mit agy schreiben
-  python3 rulebook_pdf.py images PROJEKT [--all]      Fehlende (oder alle) Bilder generieren
-  python3 rulebook_pdf.py edit PROJEKT KEY "Anweisung"  Bild per Gemini bearbeiten (Interaction-Kette)
-  python3 rulebook_pdf.py check PROJEKT [--no-fix]    Bilder mit agy prüfen (und unpassende neu machen)
-  python3 rulebook_pdf.py restructure PROJEKT ORIGINAL.pdf
+  python3 illuminator.py gui [PROJEKT]              Oberfläche starten
+  python3 illuminator.py new PROJEKT QUELLE          Projekt anlegen (md, docx, pdf, txt), --type document für Readme/Tutorial
+  python3 illuminator.py plan PROJEKT [--force]      Bild-Prompts mit agy schreiben
+  python3 illuminator.py images PROJEKT [--all]      Fehlende (oder alle) Bilder generieren
+  python3 illuminator.py edit PROJEKT KEY "Anweisung"  Bild per Gemini bearbeiten (Interaction-Kette)
+  python3 illuminator.py check PROJEKT [--no-fix]    Bilder mit agy prüfen (und unpassende neu machen)
+  python3 illuminator.py restructure PROJEKT ORIGINAL.pdf
                                                       Überschriften-Ebenen nach dem Original-PDF richten
-  python3 rulebook_pdf.py build PROJEKT               PDF setzen
-  python3 rulebook_pdf.py all PROJEKT                 plan + images + build
+  python3 illuminator.py build PROJEKT               PDF setzen
+  python3 illuminator.py all PROJEKT                 plan + images + build
 """
 import argparse
 import sys

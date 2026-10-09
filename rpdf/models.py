@@ -3,7 +3,7 @@
 The model family is read from the safetensors header (tensor names), so it
 does not depend on file names. Each family brings the workflow type, text
 encoder, VAE and sampler settings it was made for. Settings that worked for a
-specific file are remembered across projects in ~/.config/rulebook-pdf/models.json.
+specific file are remembered across projects in ~/.config/illuminator/models.json.
 """
 import configparser
 import json
@@ -13,7 +13,7 @@ import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
-USER_FILE = Path.home() / ".config" / "rulebook-pdf" / "models.json"
+USER_FILE = Path.home() / ".config" / "illuminator" / "models.json"
 ENGINE_KEYS = ("workflow", "clip", "clip_type", "vae", "steps", "cfg", "sampler", "scheduler")
 
 FAST_HINT = re.compile(r"(?i)lightning|turbo|hyper|dmd|lcm|schnell|flash")

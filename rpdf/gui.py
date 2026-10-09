@@ -1,4 +1,4 @@
-"""PySide6 front end for rulebook-pdf."""
+"""PySide6 front end for Illuminator."""
 import random
 import shutil
 import sys
@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Rulebook PDF")
         self.resize(1500, 920)
-        self.settings = QSettings("KINETIK", "rulebook-pdf")
+        self.settings = QSettings("Illuminator", "illuminator")
         self.project = None
         self.job = None
         self.slots = []
