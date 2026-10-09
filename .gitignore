@@ -1,0 +1,27 @@
+# Umgebung / Caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Schriften werden mit fetch_fonts.py geladen (nicht im Repo)
+rpdf/fonts/
+
+# Projektordner mit Bildern, Builds und Exporten
+/projects/
+*/.build/
+.build/
+*.pdf
+images/
+media/
+*.vor-restructure.md
+
+# Secrets
+.env
+gemini.key
+*.key
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

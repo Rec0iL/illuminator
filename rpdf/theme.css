@@ -1,0 +1,156 @@
+/* Template: the $$-placeholders below are filled from project.json */
+:root{
+  --bg:${bg};
+  --ink:${ink};
+  --ink-dim:${ink_dim};
+  --cyan:${accent};
+  --magenta:${accent2};
+  --accent-soft:${accent_soft};
+  --accent-line:${accent_line};
+  --card:rgba(16,18,24,0.88);
+  --rule:rgba(255,255,255,0.10);
+}
+*{ box-sizing:border-box; }
+html, body{ margin:0; padding:0; color:var(--ink); }
+body{ font-family:'Barlow', 'Noto Emoji', sans-serif; font-size:${font_size}pt; line-height:1.45;
+      text-align:${text_align}; hyphens:auto; hyphenate-character:"-"; orphans:3; widows:3; }
+p{ margin:0 0 .6em 0; }
+strong{ color:#fff; font-weight:600; }
+em{ color:#d7dce4; }
+
+/* ---------- pages ---------- */
+@page{
+  size:A4;
+  margin:22mm 17mm 20mm 17mm;
+  background:var(--bg);
+  @top-left{ content:string(runhead, first); font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700;
+             font-size:7.5pt; letter-spacing:.25em; color:var(--ink-dim); vertical-align:bottom; padding-bottom:4mm; }
+  @top-right{ content:string(chaptitle, first); font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700;
+              font-size:7.5pt; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);
+              vertical-align:bottom; padding-bottom:4mm; }
+  @bottom-center{ content:counter(page); font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700;
+                  font-size:8pt; letter-spacing:.1em; color:var(--ink-dim); }
+}
+@page :first{ margin:0;
+  @bottom-center{ content:none; } }
+
+/* WeasyPrint clips @page background images to the page area, so the texture
+   is a fixed element instead -- fixed elements repeat on every page. */
+.pagebg{ position:fixed; top:-22mm; left:-17mm; width:210mm; height:297mm; z-index:-1;
+         background-position:center; background-size:cover; background-repeat:no-repeat; }
+
+/* ---------- cover ---------- */
+.cover{ position:relative; width:210mm; height:297mm; break-after:page;
+        string-set: runhead "", chaptitle ""; background:var(--bg); }
+.cover-img{ position:absolute; top:0; left:0; width:210mm; height:297mm;
+            background-position:center top; background-size:100% auto; background-repeat:no-repeat; }
+.cover-scrim{ position:absolute; top:0; left:0; width:210mm; height:297mm;
+              background:linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,.72) 72%, var(--bg) 92%); }
+.cover-text{ position:absolute; left:0; right:0; bottom:20mm; text-align:center; padding:0 14mm; }
+.cover-kicker{ font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700; letter-spacing:.45em;
+               font-size:10pt; color:var(--cyan); margin-bottom:4mm; }
+.cover-title{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:${cover_title_size}pt; line-height:.85;
+              letter-spacing:.06em; margin:0; color:#fff; text-shadow:3px 3px 0 var(--magenta); }
+.cover-sub{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-size:16pt; font-weight:500; letter-spacing:.18em;
+            color:var(--cyan); margin-top:3mm; text-transform:uppercase; }
+.cover-meta{ font-size:9.5pt; color:var(--ink-dim); margin-top:5mm; text-align:center; }
+
+/* ---------- foreword (text before the first chapter) ---------- */
+.foreword{ break-before:page; }
+
+/* ---------- chapter opener ---------- */
+.chapter{ break-before:page; }
+/* images are shown whole: the banner takes the image's own height instead of cropping it */
+.opener{ position:relative; margin:-22mm -17mm 8mm -17mm; overflow:hidden;
+         string-set: runhead "", chaptitle ""; }
+.opener img{ width:100%; height:auto; display:block; }
+.opener-scrim{ position:absolute; top:0; left:0; right:0; bottom:0;
+               background:linear-gradient(180deg, rgba(0,0,0,0) 35%, var(--bg) 100%); opacity:.92; }
+.opener-label{ position:absolute; left:17mm; right:17mm; bottom:6mm; }
+.opener.plain{ height:auto; margin:-4mm 0 8mm 0; overflow:visible; }
+.opener.plain .opener-label{ position:static; border-bottom:2px solid var(--magenta); padding-bottom:3mm; }
+.chapter-num{ font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700; font-size:9pt;
+              letter-spacing:.35em; text-transform:uppercase; color:var(--magenta); margin-bottom:1mm; }
+.opener h2{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:44pt; line-height:.95;
+            letter-spacing:.03em; color:#fff; margin:0; text-align:left; }
+.chapter-sub{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:500; font-size:11pt; letter-spacing:.12em;
+              text-transform:uppercase; color:var(--cyan); margin-top:1.5mm; }
+.runhead-anchor{ height:0; }
+
+/* ---------- body blocks ---------- */
+.cols{ column-count:2; column-gap:8mm; column-rule:1px solid var(--rule); }
+.cols > *:first-child{ margin-top:0; }
+.cols.single{ column-count:1; }
+.intro{ margin-bottom:4mm; }
+.lead{ font-size:${lead_size}pt; }
+.dropcap{ float:left; font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-size:44pt; line-height:.82;
+          margin:1mm 2mm 0 0; color:var(--magenta); }
+
+.sub{ margin-top:7mm; }
+.sub-head{ break-inside:avoid; break-after:avoid; }
+.sub-head h3{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:600; font-size:14pt; line-height:1.15;
+              letter-spacing:.04em; text-transform:uppercase; color:var(--cyan); margin:0 0 2.5mm 0;
+              padding-bottom:1.5mm; border-bottom:1px solid var(--accent-line); text-align:left; }
+.sub-figure{ margin:0 0 4mm 0; }
+.sub-figure img{ width:auto; height:auto; max-width:100%; max-height:66mm; display:block; margin:0 auto;
+                 border:1px solid var(--rule); }
+
+.cols h3, .cols h4, .cols h5, .cols h6, .appendix-body h4, .appendix-body h5{
+  font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:600; font-size:10.5pt; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--cyan); margin:1em 0 .4em 0; break-after:avoid; text-align:left; }
+
+/* filler image in the empty space after a short block; the page ends after it */
+.filler{ margin:${filler_gap}mm 0 0 0; break-inside:avoid; break-after:page; column-span:all; }
+/* after the forced page break the next block would keep its top margin (unlike in the probe
+   layout without fillers, where the margin is dropped at the page top) and shift everything */
+.filler + .sub, .filler + .cols, .filler + .md-figure{ margin-top:0; }
+.filler img{ width:100%; height:100%; object-fit:contain; display:block; border:1px solid var(--rule); }
+
+/* images from the Markdown itself (diagrams, sheets, the author's own art) */
+.md-figure{ margin:1mm 0 4mm 0; text-align:center; break-inside:avoid; }
+.md-figure img{ max-width:100%; max-height:100mm; }
+.md-figure.wide img{ max-height:95mm; }
+.md-figure figcaption{ font-size:7.8pt; line-height:1.3; font-style:italic; color:var(--ink-dim);
+                       margin-top:1.5mm; text-align:center; hyphens:manual; }
+
+ul, ol{ padding-left:1.15em; margin:0 0 .6em 0; }
+li{ margin-bottom:.25em; }
+li > ul, li > ol{ margin-top:.25em; }
+blockquote{ margin:0 0 .8em 0; padding:.3em .9em; border-left:2px solid var(--magenta); color:var(--ink-dim); font-style:italic; }
+hr{ border:none; border-top:1px solid var(--rule); margin:1em 0; }
+code{ font-size:.9em; color:var(--cyan); }
+
+/* ---------- tables ---------- */
+/* wide tables and figures sit between the column groups of a section (see layout._columns) */
+.table-wide{ margin:2mm 0 4mm 0; }
+.table-narrow{ margin:1mm 0 3mm 0; break-inside:avoid; }
+table.rules-table{ width:100%; border-collapse:collapse; background:var(--card); font-size:8.6pt;
+                   line-height:1.3; text-align:left; hyphens:manual;
+                   border-top:2px solid var(--cyan); }
+table.rules-table th, table.rules-table td{ padding:1.4mm 2mm; border-bottom:1px solid var(--rule); vertical-align:top; }
+table.rules-table th{ background:var(--accent-soft); color:var(--cyan); font-family:'Oswald', 'Noto Emoji', sans-serif;
+                      font-weight:500; letter-spacing:.05em; text-transform:uppercase; font-size:7.6pt; }
+table.rules-table tr:nth-child(even) td{ background:rgba(255,255,255,.025); }
+table.rules-table tr{ break-inside:avoid; }
+/* inline images from the Markdown (e.g. a centred hero screenshot) stay inside the text area */
+p > img{ display:block; max-width:100%; height:auto; margin:2mm auto; }
+/* screenshots in table cells (README galleries) must not push the table past the page */
+table.rules-table td img{ display:block; max-width:100%; height:auto; margin:0 auto; }
+.table-narrow table.rules-table{ break-inside:avoid; }
+
+/* short sections: smaller image beside the text instead of a full-width banner */
+.sub.compact{ break-inside:avoid; }
+.compact-body{ display:flow-root; }
+.side-figure{ float:right; width:47%; margin:1mm 0 3mm 5mm; }
+.side-figure img{ width:auto; height:auto; max-width:100%; max-height:60mm; display:block; margin-left:auto;
+                  border:1px solid var(--rule); }
+
+/* ---------- appendix ---------- */
+.appendix + .appendix{ break-before:auto; margin-top:10mm; }
+.appendix h2{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:30pt; letter-spacing:.03em;
+              color:#fff; border-bottom:2px solid var(--magenta); padding-bottom:2mm; margin:0 0 5mm 0;
+              text-align:left; break-after:avoid; }
+.appendix + .appendix h2{ font-size:22pt; border-bottom-width:1px; }
+.appendix-body h3{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:600; font-size:12pt; letter-spacing:.04em;
+                   text-transform:uppercase; color:var(--cyan); margin:6mm 0 2mm 0; break-after:avoid; }
+.appendix-body{ text-align:left; }

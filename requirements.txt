@@ -1,0 +1,5 @@
+PySide6>=6.5
+markdown>=3.4
+weasyprint>=60
+Pillow>=9
+google-genai   # nur für engine=gemini
