@@ -5,10 +5,12 @@ No API key needed, agy uses its own login. agy stores results in
 "interaction id" so later edits continue the same conversation (`agy --conversation ID`).
 """
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image
@@ -17,11 +19,52 @@ from . import planner
 from .gemini import Gemini, GeminiError, fit_to
 
 BRAIN = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+CLI_LOG = Path.home() / ".gemini" / "antigravity-cli" / "cli.log"
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 RATIO_WORDS = {"1:1": "square 1:1", "16:9": "wide landscape 16:9", "9:16": "tall portrait 9:16",
                "4:3": "landscape 4:3", "3:4": "portrait 3:4"}
 RULES = ("Use your image generation tool for this, nothing else: do not run commands, do not create or "
          "edit other files. Reply with the path of the resulting image file only.")
+
+
+class QuotaExhausted(GeminiError):
+    """agy's image quota is used up: no point in waiting for an image."""
+
+
+def _log_size():
+    try:
+        return CLI_LOG.stat().st_size
+    except OSError:
+        return 0
+
+
+def _check_quota(offset, only_future=False):
+    """Raise QuotaExhausted if agy's log shows a quota error written after `offset` (log size at start)."""
+    try:
+        with open(CLI_LOG, "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(offset if offset <= size else 0)
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return
+    if "QUOTA_EXHAUSTED" not in text:
+        return
+    m = re.findall(r'"quotaResetTimeStamp":\s*"([^"]+)"', text)
+    when = ""
+    if only_future and not m:
+        return
+    if m:
+        try:
+            ts = datetime.fromisoformat(m[-1].replace("Z", "+00:00")).astimezone()
+            left = ts - datetime.now(timezone.utc).astimezone()
+            if only_future and left.total_seconds() <= 0:
+                return          # old error, quota has been reset since
+            mins = max(0, int(left.total_seconds() // 60))
+            when = f" Zurücksetzung um {ts:%H:%M} Uhr (in {mins // 60} h {mins % 60:02d} min)."
+        except ValueError:
+            pass
+    raise QuotaExhausted("agy-Bildkontingent erschöpft." + when + " Bis dahin andere Bild-Engine wählen "
+                         "(Gemini API oder ComfyUI).")
 
 
 def _images(folder):
@@ -43,6 +86,7 @@ class AgyImage(Gemini):
     def check_config(cfg):
         if not planner.agy_available():
             raise GeminiError("agy wurde nicht gefunden (Antigravity CLI, angemeldet).")
+        _check_quota(max(0, _log_size() - 400_000), only_future=True)   # known quota error that is still active
 
     def _run(self, prompt, conversation=None, cwd=None, cancelled=lambda: False):
         cmd = ["agy", "-p", prompt, "--output-format", "json", "--print-timeout", f"{self.timeout}s"]
@@ -50,9 +94,11 @@ class AgyImage(Gemini):
             cmd += ["--conversation", conversation]
         if self.agy_model:
             cmd += ["--model", self.agy_model]
+        log_offset = _log_size()
         with tempfile.TemporaryDirectory(prefix="rpdf-agy-img-") as tmp:
             before = _images(BRAIN / conversation) if conversation else {}
             proc = subprocess.run(cmd, cwd=cwd or tmp, capture_output=True, text=True, timeout=self.timeout + 60)
+        _check_quota(log_offset)
         out = proc.stdout.strip()
         start = out.find("{")
         if start < 0:
@@ -73,6 +119,7 @@ class AgyImage(Gemini):
                 if size and size == last:
                     return cid, path
                 last = size
+            _check_quota(log_offset)
             time.sleep(2)
         raise GeminiError(f"agy hat kein Bild geliefert: {(data.get('response') or '')[:300]}")
 

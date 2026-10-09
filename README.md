@@ -111,7 +111,7 @@ For `agy` and `gemini`:
 - Only the aspect ratios 1:1, 16:9, 9:16, 4:3, 3:4 exist; the tool picks the nearest one and center-crops to the target size (wide banners lose some height). No seed and no negative prompt (negatives are appended as "Do not include …").
 - `illuminator.py edit PROJECT KEY "instruction"` changes an existing image instead of regenerating it.
 - Image check: 1 generation + at most 2 edits of the same image (only the problems found), then no further changes. The concept/regenerate loop applies to ComfyUI only.
-- If agy reports an exhausted quota (`QUOTA_EXHAUSTED`), image generation is blocked until the reset time shown in `~/.gemini/antigravity-cli/cli.log`; switch the engine in the meantime.
+- If agy's image quota is exhausted (`QUOTA_EXHAUSTED` in `~/.gemini/antigravity-cli/cli.log`), the run stops immediately with the reset time instead of waiting for images; a still-active quota error is also detected before the run starts. Switch the engine in the meantime.
 
 ## Prompt generator: agy or Claude
 

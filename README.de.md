@@ -194,6 +194,7 @@ Für `agy` und `gemini` gilt:
 - Formate kommen nur als 1:1, 16:9, 9:16, 4:3, 3:4; das Tool wählt das nächste und schneidet mittig auf die Zielgröße zu (breite Banner verlieren etwas Höhe). Kein Seed, kein Negativ-Prompt (Negatives werden als „Do not include …“ angehängt).
 - `illuminator.py edit PROJEKT KEY "Anweisung"` ändert ein vorhandenes Bild, statt es neu zu erzeugen.
 - Bildkontrolle (QC): 1 Generierung + höchstens 2 Bearbeitungen desselben Bildes (nur die gefundenen Probleme), danach keine weiteren Änderungen. Die Konzept-/Neu-Generieren-Schleife gilt nur für ComfyUI.
+- Ist das agy-Bildkontingent erschöpft (`QUOTA_EXHAUSTED` in `~/.gemini/antigravity-cli/cli.log`), bricht der Lauf sofort mit der Reset-Zeit ab, statt auf Bilder zu warten; ein noch aktiver Fehler wird schon vor dem Start erkannt. Bis dahin die Engine wechseln.
 - Die Engine wählst du in der Oberfläche unter **Engine → Bild-Engine** (oder in `project.json`).
 
 ## Lizenz
