@@ -101,11 +101,48 @@ class AgyError(RuntimeError):
     pass
 
 
-def available():
+# which CLI writes prompts and judges images: "agy" (Antigravity) or "claude" (Claude Code)
+BACKEND = {"llm": "agy", "claude_model": "sonnet"}
+CLAUDE_MODELS = ["sonnet", "opus", "haiku"]
+
+
+def configure(cfg):
+    """Take the prompt generator from a project config (cfg["llm"], cfg["claude"]["model"])."""
+    BACKEND["llm"] = cfg.get("llm") or "agy"
+    BACKEND["claude_model"] = (cfg.get("claude") or {}).get("model") or "sonnet"
+
+
+def agy_available():
     return shutil.which("agy") is not None
 
 
+def available():
+    """Is the CLI of the selected prompt generator installed?"""
+    return shutil.which(BACKEND["llm"]) is not None
+
+
+def _claude(prompt, schema, cwd, tools="", timeout=600):
+    """One Claude Code print-mode turn with structured output. tools="" = no tools; "Read" = file viewing only
+    (pre-approved, nothing else; no permission bypass)."""
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--json-schema", json.dumps(schema),
+           "--model", BACKEND["claude_model"], "--tools", tools, "--no-session-persistence"]
+    if tools:
+        cmd += ["--allowedTools", tools]
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    out = proc.stdout.strip()
+    start = out.find("{")
+    if start < 0:
+        raise AgyError(f"claude lieferte keine Antwort: {(proc.stderr or out)[-600:]}")
+    data = json.loads(out[start:])
+    if data.get("is_error"):
+        raise AgyError(f"claude-Fehler: {str(data.get('result') or data.get('subtype'))[:400]}")
+    data.setdefault("response", data.get("result"))
+    return data
+
+
 def list_models():
+    if BACKEND["llm"] == "claude":
+        return list(CLAUDE_MODELS)
     try:
         out = subprocess.run(["agy", "models"], capture_output=True, text=True, timeout=60).stdout
     except Exception:
@@ -173,7 +210,15 @@ def run(prompt, schema, model=None, timeout=600):
     tries a tool (which then gets denied) and comes back empty, ask once more.
     """
     if not available():
-        raise AgyError("agy wurde nicht gefunden (Antigravity CLI).")
+        raise AgyError(f"{BACKEND['llm']} wurde nicht gefunden (CLI im PATH?).")
+    if BACKEND["llm"] == "claude":
+        with tempfile.TemporaryDirectory(prefix="rpdf-claude-") as tmp:
+            for attempt in range(2):
+                data = _claude(NO_TOOLS + prompt, schema, tmp, timeout=timeout)
+                result = _structured(data, schema)
+                if result is not None:
+                    return result
+        raise AgyError(f"claude lieferte kein gültiges JSON: {str(data.get('response'))[:300]}")
     data = {}
     for attempt in range(2):
         full = NO_TOOLS + (RETRY_NOTE if attempt else "") + prompt
@@ -347,7 +392,15 @@ def _run_on_image(image_path, work_dir, prompt, schema, model=None):
             "Only view that file: do not run commands, do not create or edit files.\n"
             "Set could_view=false if you could not open the image.\n\n")
     if not available():
-        raise AgyError("agy wurde nicht gefunden (Antigravity CLI).")
+        raise AgyError(f"{BACKEND['llm']} wurde nicht gefunden (CLI im PATH?).")
+    if BACKEND["llm"] == "claude":
+        data = _claude(head + prompt, schema, work_dir, tools="Read", timeout=360)
+        result = _structured(data, schema)
+        if not result:
+            raise AgyError(f"claude-Fehler bei der Bildanalyse: {str(data.get('response'))[:400]}")
+        if not result.get("could_view"):
+            raise AgyError("claude konnte das Bild nicht öffnen.")
+        return result
     with tempfile.TemporaryDirectory(prefix="rpdf-agy-") as tmp:
         schema_path = Path(tmp) / "schema.json"
         schema_path.write_text(json.dumps(schema), encoding="utf-8")

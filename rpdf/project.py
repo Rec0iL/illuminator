@@ -5,7 +5,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import mdparse
+from . import mdparse, planner
 
 DEFAULTS = {
     "source": "",
@@ -46,7 +46,9 @@ DEFAULTS = {
     "negative": "worst quality, low quality, blurry, jpeg artifacts, bad anatomy, watermark, "
                 "text, letters, signature, logo, deformed, extra limbs, lowres",
     "world": "",                   # short genre/setting summary written by the planner
+    "llm": "agy",                  # prompt generator and image judge: agy | claude (Claude Code CLI)
     "agy": {"model": "gemini-3.8-flash-medium"},
+    "claude": {"model": "sonnet"},
     "engine": "agy",               # agy (Antigravity CLI, no key) | gemini (Interactions API, GEMINI_API_KEY) | comfy
     "gemini": {
         "model": "gemini-3.1-flash-lite-image",
@@ -120,6 +122,7 @@ class Project:
         man = self.root / "images.json"
         if man.exists():
             self.manifest = json.loads(man.read_text(encoding="utf-8"))
+        planner.configure(self.config)
 
     # ---------- persistence ----------
     def save(self):

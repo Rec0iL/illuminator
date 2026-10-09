@@ -395,7 +395,13 @@ class MainWindow(QMainWindow):
     def _engine_tab(self):
         w = QWidget()
         f = QFormLayout(w)
-        f.addRow(section_label("agy (Prompts)"))
+        f.addRow(section_label("Prompt-Generator"))
+        self.cb_llm = QComboBox()
+        self.cb_llm.addItem("agy – Antigravity CLI", "agy")
+        self.cb_llm.addItem("Claude Code CLI (claude)", "claude")
+        self.cb_llm.activated.connect(lambda _: self._llm_changed())
+        f.addRow("Programm", self.cb_llm)
+        self._llm_shown = "agy"
         self.cb_agy = QComboBox()
         self.cb_agy.setEditable(True)
         self.cb_agy.setMinimumContentsLength(14)
@@ -687,7 +693,11 @@ class MainWindow(QMainWindow):
         self.ed_style.setPlainText(c.get("style", ""))
         self.ed_negative.setPlainText(c.get("negative", ""))
         self.ed_world.setPlainText(c.get("world", ""))
-        self.cb_agy.setCurrentText(c["agy"].get("model", ""))
+        self.cb_llm.setCurrentIndex(max(0, self.cb_llm.findData(c.get("llm", "agy"))))
+        self._llm_shown = self.cb_llm.currentData()
+        self.cb_agy.clear()
+        self.cb_agy.addItems(planner.CLAUDE_MODELS if self._llm_shown == "claude" else [])
+        self.cb_agy.setCurrentText(c["claude" if self._llm_shown == "claude" else "agy"].get("model", ""))
         self.cb_engine.setCurrentIndex(max(0, self.cb_engine.findData(c.get("engine", "agy"))))
         self.ed_gem_model.setText(c["gemini"].get("model", ""))
         self.cb_thinking.setCurrentText(c["gemini"].get("thinking_level", "low"))
@@ -732,7 +742,9 @@ class MainWindow(QMainWindow):
         c["style"] = self.ed_style.toPlainText().strip()
         c["negative"] = self.ed_negative.toPlainText().strip()
         c["world"] = self.ed_world.toPlainText().strip()
-        c["agy"]["model"] = self.cb_agy.currentText().strip()
+        c["llm"] = self.cb_llm.currentData()
+        c["claude" if c["llm"] == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
+        planner.configure(c)
         c["engine"] = self.cb_engine.currentData()
         c["gemini"].update(model=self.ed_gem_model.text().strip() or DEFAULTS["gemini"]["model"],
                            thinking_level=self.cb_thinking.currentText())
@@ -1347,6 +1359,19 @@ class MainWindow(QMainWindow):
                 self.cb_model.setCurrentIndex(i)
                 self._on_model_selected(i)
                 break
+
+    def _llm_changed(self):
+        """Swap the model box between the agy and the Claude model of the project."""
+        if not self.project:
+            return
+        c = self.project.config
+        c["claude" if self._llm_shown == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
+        self._llm_shown = self.cb_llm.currentData()
+        c["llm"] = self._llm_shown
+        planner.configure(c)
+        self.cb_agy.clear()
+        self.cb_agy.addItems(planner.CLAUDE_MODELS if self._llm_shown == "claude" else [])
+        self.cb_agy.setCurrentText(c["claude" if self._llm_shown == "claude" else "agy"].get("model", ""))
 
     def _load_agy_models(self):
         current = self.cb_agy.currentText()

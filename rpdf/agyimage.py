@@ -37,11 +37,11 @@ class AgyImage(Gemini):
         self.agy_model = None
 
     def alive(self):
-        return planner.available()
+        return planner.agy_available()
 
     @staticmethod
     def check_config(cfg):
-        if not planner.available():
+        if not planner.agy_available():
             raise GeminiError("agy wurde nicht gefunden (Antigravity CLI, angemeldet).")
 
     def _run(self, prompt, conversation=None, cwd=None, cancelled=lambda: False):
