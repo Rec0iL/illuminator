@@ -49,6 +49,7 @@ DEFAULTS = {
     "llm": "agy",                  # prompt generator and image judge: agy | claude (Claude Code CLI)
     "agy": {"model": "gemini-3.8-flash-medium"},
     "claude": {"model": "sonnet"},
+    "quota_wait": False,           # agy quota used up: wait for the reset and continue automatically
     "engine": "agy",               # agy (Antigravity CLI, no key) | gemini (Interactions API, GEMINI_API_KEY) | comfy
     "gemini": {
         "model": "gemini-3.1-flash-lite-image",

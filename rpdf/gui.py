@@ -428,10 +428,14 @@ class MainWindow(QMainWindow):
         self.gem_text_agy = ("Bilder erzeugt und bearbeitet agy mit seinem eingebauten Bildwerkzeug über die "
                              "eigene Anmeldung (ca. 40–100 s pro Bild). Seitenverhältnis: nächstes von 1:1, "
                              "16:9, 9:16, 4:3, 3:4, dann mittig zugeschnitten. Kein Seed, kein Negativ-Prompt.")
+        self.chk_quota_wait = QCheckBox("Bei erschöpftem agy-Kontingent warten und automatisch fortsetzen")
+        self.chk_quota_wait.setToolTip("Statt abzubrechen wartet das Tool bis zur Reset-Zeit aus agys Log "
+                                       "(plus 90 s) und macht dann weiter. Abbrechen geht jederzeit.")
         self.lb_gem = QLabel()
         self.lb_gem.setWordWrap(True)
         self.lb_gem.setObjectName("dim")
         f.addRow(self.lb_gem)
+        f.addRow("", self.chk_quota_wait)
         f.addRow("Gemini-Modell", self.ed_gem_model)
         f.addRow("Thinking", self.cb_thinking)
         self.gem_widgets = [self.ed_gem_model, self.cb_thinking]
@@ -699,6 +703,7 @@ class MainWindow(QMainWindow):
         self.cb_agy.addItems(planner.CLAUDE_MODELS if self._llm_shown == "claude" else [])
         self.cb_agy.setCurrentText(c["claude" if self._llm_shown == "claude" else "agy"].get("model", ""))
         self.cb_engine.setCurrentIndex(max(0, self.cb_engine.findData(c.get("engine", "agy"))))
+        self.chk_quota_wait.setChecked(bool(c.get("quota_wait")))
         self.ed_gem_model.setText(c["gemini"].get("model", ""))
         self.cb_thinking.setCurrentText(c["gemini"].get("thinking_level", "low"))
         cc = c["comfy"]
@@ -746,6 +751,7 @@ class MainWindow(QMainWindow):
         c["claude" if c["llm"] == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
         planner.configure(c)
         c["engine"] = self.cb_engine.currentData()
+        c["quota_wait"] = self.chk_quota_wait.isChecked()
         c["gemini"].update(model=self.ed_gem_model.text().strip() or DEFAULTS["gemini"]["model"],
                            thinking_level=self.cb_thinking.currentText())
         cc = c["comfy"]
@@ -1400,6 +1406,7 @@ class MainWindow(QMainWindow):
         for i in self.comfy_rows:
             f.setRowVisible(i, eng == "comfy")
         f.setRowVisible(self.lb_gem, eng != "comfy")
+        f.setRowVisible(self.chk_quota_wait, eng == "agy")
         self.lb_gem.setText(self.gem_text_agy if eng == "agy" else
                             "Direkter Aufruf der Gemini Interactions API. Braucht GEMINI_API_KEY (oder ~/gemini.key) "
                             "und `pip install google-genai`. Seitenverhältnis wie bei agy, kein Seed.")

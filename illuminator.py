@@ -29,6 +29,8 @@ def main():
                     help="new: PnP-Regelwerk (Standard) oder anderes Dokument (Readme, Tutorial, Doku)")
     ap.add_argument("--force", action="store_true", help="plan: vorhandene Prompts neu schreiben")
     ap.add_argument("--all", action="store_true", help="images: auch vorhandene Bilder neu generieren")
+    ap.add_argument("--wait-quota", action="store_true",
+                    help="bei erschöpftem agy-Bildkontingent bis zum Reset warten und automatisch weitermachen")
     ap.add_argument("--no-fix", action="store_true", help="check: nur prüfen, nichts neu generieren")
     args = ap.parse_args()
 
@@ -61,6 +63,8 @@ def run_command(args, ap, ctx):
         return
 
     p = proj.Project(args.project)
+    if args.wait_quota:
+        p.config["quota_wait"] = True
     if args.command == "restructure":
         return restructure(p, args.source, ctx)
     if args.command in ("plan", "all"):

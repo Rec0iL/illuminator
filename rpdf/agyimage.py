@@ -28,7 +28,12 @@ RULES = ("Use your image generation tool for this, nothing else: do not run comm
 
 
 class QuotaExhausted(GeminiError):
-    """agy's image quota is used up: no point in waiting for an image."""
+    """agy's image quota is used up: no point in waiting for an image.
+    reset_at: aware datetime when the quota comes back (None if the log did not say)."""
+
+    def __init__(self, msg, reset_at=None):
+        super().__init__(msg)
+        self.reset_at = reset_at
 
 
 def _log_size():
@@ -50,12 +55,12 @@ def _check_quota(offset, only_future=False):
     if "QUOTA_EXHAUSTED" not in text:
         return
     m = re.findall(r'"quotaResetTimeStamp":\s*"([^"]+)"', text)
-    when = ""
+    when, reset_at = "", None
     if only_future and not m:
         return
     if m:
         try:
-            ts = datetime.fromisoformat(m[-1].replace("Z", "+00:00")).astimezone()
+            ts = reset_at = datetime.fromisoformat(m[-1].replace("Z", "+00:00")).astimezone()
             left = ts - datetime.now(timezone.utc).astimezone()
             if only_future and left.total_seconds() <= 0:
                 return          # old error, quota has been reset since
@@ -64,7 +69,7 @@ def _check_quota(offset, only_future=False):
         except ValueError:
             pass
     raise QuotaExhausted("agy-Bildkontingent erschöpft." + when + " Bis dahin andere Bild-Engine wählen "
-                         "(Gemini API oder ComfyUI).")
+                         "(Gemini API oder ComfyUI) oder „Bei erschöpftem Kontingent warten“ einschalten.", reset_at)
 
 
 def _images(folder):

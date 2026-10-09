@@ -22,9 +22,44 @@ def engine(project):
     return comfy.Comfy, comfy.Comfy(cfg["url"]), cfg
 
 
-def _ready(project):
+QUOTA_MARGIN_S = 90        # wait a bit longer than the reset time before trying again
+QUOTA_FALLBACK_S = 1800    # reset time unknown: try again every 30 minutes
+
+
+def with_quota_wait(project, ctx, fn):
+    """Run fn(); if agy's image quota is used up and project.config["quota_wait"] is on, sleep until
+    the reset time (cancelable, with a status line every 10 minutes) and try again."""
+    import time
+    from datetime import datetime
+    while True:
+        try:
+            return fn()
+        except agyimage.QuotaExhausted as e:
+            if not project.config.get("quota_wait"):
+                raise
+            if e.reset_at:
+                until = e.reset_at.timestamp() + QUOTA_MARGIN_S
+            else:
+                until = time.time() + QUOTA_FALLBACK_S
+            ctx.log(f"agy-Kontingent erschöpft – warte bis {datetime.fromtimestamp(until):%H:%M} Uhr "
+                    "und mache dann automatisch weiter (Abbrechen jederzeit möglich).")
+            next_note = time.time() + 600
+            while time.time() < until:
+                ctx.check()
+                time.sleep(2)
+                if time.time() >= next_note:
+                    mins = int((until - time.time()) // 60)
+                    ctx.log(f"    noch ca. {mins // 60} h {mins % 60:02d} min bis zum Weitermachen")
+                    next_note += 600
+            ctx.log("Wartezeit vorbei – mache weiter.")
+
+
+def _ready(project, ctx=None):
     E, client, cfg = engine(project)
-    E.check_config(cfg)
+    if ctx is not None:
+        with_quota_wait(project, ctx, lambda: E.check_config(cfg))
+    else:
+        E.check_config(cfg)
     if not client.alive():
         raise comfy.ComfyError(f"ComfyUI unter {cfg['url']} nicht erreichbar – in Pinokio starten.")
     return E, client, cfg
@@ -198,7 +233,7 @@ def images(project, ctx, keys=None, regenerate=False, new_seed=False):
         ctx.log(f"Ohne Prompt übersprungen: {', '.join(s.title for s in no_prompt)} – erst „Prompts planen“.")
         todo = [s for s in todo if s not in no_prompt]
 
-    E, client, cfg = _ready(project)
+    E, client, cfg = _ready(project, ctx)
 
     qc = project.config.get("qc", {})
     for i, s in enumerate(todo):
@@ -232,15 +267,15 @@ def edit_image(project, key, instruction, ctx):
     slot = next(s for s in project.slots() if s.key == key)
     if not project.has_image(key):
         raise FileNotFoundError("Für diesen Platz gibt es noch kein Bild.")
-    E, client, cfg = _ready(project)
+    E, client, cfg = _ready(project, ctx)
     e = project.entry(key)
     w, h = size_for(slot)
     req = E.build_workflow(cfg, instruction, "", w, h, 0)
     req["prompt"] = instruction     # edits are plain instructions: no panorama/avoid suffixes
     prev = e.get("interaction_id")
     ctx.log(f"Bearbeite {slot.title} ({'Interaction ' + prev[:12] + '…' if prev else 'lokale Datei'})")
-    img = client.generate(req, cancelled=ctx.cancelled, previous_id=prev,
-                          image_path=None if prev else project.image_path(key))
+    img = with_quota_wait(project, ctx, lambda: client.generate(
+        req, cancelled=ctx.cancelled, previous_id=prev, image_path=None if prev else project.image_path(key)))
     comfy.save_image(img, project.image_path(key), slot.kind)
     _remember_interaction(e, client)
     e.pop("qc", None)
@@ -274,7 +309,7 @@ def _generate(project, client, cfg, slot, ctx):
     e = project.entry(slot.key)
     w, h = size_for(slot)
     wf = type(client).build_workflow(cfg, project.full_prompt(slot.key), project.negative(slot.key), w, h, e["seed"])
-    img = client.generate(wf, cancelled=ctx.cancelled)
+    img = with_quota_wait(project, ctx, lambda: client.generate(wf, cancelled=ctx.cancelled))
     comfy.save_image(img, project.image_path(slot.key), slot.kind)
     _remember_interaction(e, client)
     e.pop("qc", None)
@@ -370,7 +405,7 @@ def check(project, ctx, keys=None, fix=None):
     fix = qc.get("auto_fix", True) if fix is None else fix
     slots = [s for s in project.sync_manifest(project.slots())
              if project.has_image(s.key) and s.kind != "background" and (keys is None or s.key in keys)]
-    E, client, cfg = _ready(project) if fix else engine(project)
+    E, client, cfg = _ready(project, ctx) if fix else engine(project)
     misses = 0
     for i, s in enumerate(slots):
         ctx.check()
@@ -431,11 +466,11 @@ def preview(project, key, ctx, prompt=None, style=None, seed=None):
     subject = (prompt if prompt is not None else e.get("prompt", "")).strip()
     style = (style if style is not None else project.config.get("style", "")).strip()
     full = f"{subject}, {style}" if style and e.get("include_style", True) else subject
-    E, client, cfg = _ready(project)
+    E, client, cfg = _ready(project, ctx)
     w, h = size_for(slot)
     ctx.log(f"Vorschau: {slot.title}")
     wf = type(client).build_workflow(cfg, full, project.negative(key), w, h, seed or e["seed"])
-    img = client.generate(wf, cancelled=ctx.cancelled)
+    img = with_quota_wait(project, ctx, lambda: client.generate(wf, cancelled=ctx.cancelled))
     path = project.build_dir / f"preview-{key}.jpg"
     comfy.save_image(img, path, slot.kind)
     return path

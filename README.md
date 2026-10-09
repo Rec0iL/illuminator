@@ -111,7 +111,7 @@ For `agy` and `gemini`:
 - Only the aspect ratios 1:1, 16:9, 9:16, 4:3, 3:4 exist; the tool picks the nearest one and center-crops to the target size (wide banners lose some height). No seed and no negative prompt (negatives are appended as "Do not include …").
 - `illuminator.py edit PROJECT KEY "instruction"` changes an existing image instead of regenerating it.
 - Image check: 1 generation + at most 2 edits of the same image (only the problems found), then no further changes. The concept/regenerate loop applies to ComfyUI only.
-- If agy's image quota is exhausted (`QUOTA_EXHAUSTED` in `~/.gemini/antigravity-cli/cli.log`), the run stops immediately with the reset time instead of waiting for images; a still-active quota error is also detected before the run starts. Switch the engine in the meantime.
+- If agy's image quota is exhausted (`QUOTA_EXHAUSTED` in `~/.gemini/antigravity-cli/cli.log`), the run stops immediately with the reset time instead of waiting for images; a still-active quota error is also detected before the run starts. Switch the engine in the meantime, or enable **Wait and continue automatically when the agy quota is exhausted** (GUI: Engine → Image engine; `"quota_wait": true` in `project.json`; CLI: `--wait-quota`). The tool then sleeps until the reset time from the log plus 90 s (status line every 10 minutes, cancelable at any time) and resumes where it stopped; images already done are kept. If the log gives no reset time it retries every 30 minutes.
 
 ## Prompt generator: agy or Claude
 
@@ -160,7 +160,7 @@ python3 illuminator.py edit    PROJECT KEY "instruction"  # edit an image (agy/g
 python3 illuminator.py check   PROJECT [--no-fix]  # check images (--no-fix: check only)
 python3 illuminator.py restructure PROJECT ORIGINAL.pdf  # align heading levels with the original
 python3 illuminator.py build   PROJECT           # typeset the PDF
-python3 illuminator.py all     PROJECT           # plan + images + build
+python3 illuminator.py all     PROJECT           # plan + images + build (add --wait-quota to wait out an exhausted agy quota)
 ```
 
 ## Project folder
