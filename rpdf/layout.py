@@ -47,7 +47,7 @@ def _unfold_details(text):
 
 def _md(text, base=None, extra_dirs=()):
     text = _unfold_details(text)
-    out = markdown.markdown(text, extensions=["tables", "sane_lists"])
+    out = markdown.markdown(text, extensions=["tables", "sane_lists", "fenced_code"])
     return _wrap_tables(_figures(out, base, extra_dirs))
 
 

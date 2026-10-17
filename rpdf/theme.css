@@ -118,7 +118,11 @@ li{ margin-bottom:.25em; }
 li > ul, li > ol{ margin-top:.25em; }
 blockquote{ margin:0 0 .8em 0; padding:.3em .9em; border-left:2px solid var(--magenta); color:var(--ink-dim); font-style:italic; }
 hr{ border:none; border-top:1px solid var(--rule); margin:1em 0; }
-code{ font-size:.9em; color:var(--cyan); }
+code{ font-size:.9em; color:var(--cyan); hyphens:manual; }
+pre{ margin:1mm 0 3mm 0; padding:2mm 3mm; background:var(--card); border-left:2px solid var(--accent-line);
+     text-align:left; white-space:pre-wrap; overflow-wrap:anywhere; break-inside:avoid; line-height:1.35; }
+pre code{ font-size:.82em; }
+a{ color:var(--cyan); text-decoration:none; }
 
 /* ---------- tables ---------- */
 /* wide tables and figures sit between the column groups of a section (see layout._columns) */

@@ -119,13 +119,26 @@ def _keep_short_line_breaks(md):
     return "\n".join(lines)
 
 
-def normalize_markdown(md):
+FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$")
+
+
+def _normalize_prose(md):
     md = _bullets_to_lists(md)
     md = _blank_line_before_lists(md)
     md = _keep_short_line_breaks(md)
     # Nested list items indented by 1-3 spaces render fine on GitHub, but
     # python-markdown needs 4, otherwise they appear as literal "*".
     return re.sub(r"(?m)^ {1,3}([*+-] |\d+\. )", r"    \1", md)
+
+
+def normalize_markdown(md):
+    """Normalize the prose; fenced code blocks are passed through untouched."""
+    out, pos = [], 0
+    for m in FENCE_RE.finditer(md):
+        out += [_normalize_prose(md[pos:m.start()]), m.group(0)]
+        pos = m.end()
+    out.append(_normalize_prose(md[pos:]))
+    return "".join(out)
 
 
 def _headings(lines):
