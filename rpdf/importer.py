@@ -623,7 +623,7 @@ def _llm_restructure(text, ctx, model=None, kind="rulebook"):
     for i, chunk in enumerate(chunks):
         ctx.check()
         ctx.progress(i, len(chunks))
-        ctx.log(f"agy: Abschnitt {i + 1}/{len(chunks)} in Markdown umwandeln …")
+        ctx.log(f"KI: Abschnitt {i + 1}/{len(chunks)} in Markdown umwandeln …")
         md = planner.convert_to_markdown(chunk, headings, first=(i == 0), model=model, kind=kind)
         md = normalize_heading_levels(md, first=(i == 0))
         headings += re.findall(r"(?m)^#{1,4} .+$", md)

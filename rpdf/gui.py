@@ -200,6 +200,97 @@ class StatusDelegate(QStyledItemDelegate):
         return super().editorEvent(event, model, option, index)
 
 
+def palette_pixmap(pal, w=280, h=150):
+    """Small mock page in the palette's colors: chapter label, heading, body text, swatches."""
+    pm = QPixmap(w, h)
+    pm.fill(QColor(pal["bg"]))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    f = QFont()
+    f.setPixelSize(10)
+    f.setBold(True)
+    f.setLetterSpacing(QFont.AbsoluteSpacing, 2.5)
+    p.setFont(f)
+    p.setPen(QColor(pal["accent2"]))
+    p.drawText(14, 22, "KAPITEL 1")
+    p.fillRect(14, 28, 70, 2, QColor(pal["accent2"]))
+    f.setPixelSize(17)
+    f.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
+    p.setFont(f)
+    p.setPen(QColor(pal["accent"]))
+    p.drawText(14, 52, "Überschrift")
+    f.setPixelSize(10)
+    f.setBold(False)
+    f.setLetterSpacing(QFont.AbsoluteSpacing, 0)
+    p.setFont(f)
+    p.setPen(QColor(pal["ink"]))
+    for i, line in enumerate(["Fließtext im Regelwerk, gut lesbar auf", "dem Seitenhintergrund. Ein Link und",
+                              "eine Tabelle nutzen die Akzentfarbe."]):
+        p.drawText(14, 72 + 14 * i, line)
+    sw = (w - 28) // 4
+    for i, k in enumerate(("bg", "ink", "accent", "accent2")):
+        p.fillRect(14 + i * sw, h - 30, sw - 4, 18, QColor(pal[k]))
+    p.setPen(QPen(QColor(255, 255, 255, 60), 1))
+    p.setBrush(Qt.NoBrush)
+    p.drawRect(14, h - 30, sw - 4, 18)
+    p.end()
+    return pm
+
+
+class PaletteDialog(QDialog):
+    """Shows the proposed palettes as small mock pages; the user picks one."""
+
+    def __init__(self, palettes, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Farbpalette wählen")
+        self.palettes, self.choice = palettes, None
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("Welche Farbpalette soll das PDF bekommen? (Doppelklick übernimmt sofort)"))
+        grid = QGridLayout()
+        self.cards = []
+        for i, pal in enumerate(palettes):
+            b = QToolButton()
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setIcon(QIcon(palette_pixmap(pal)))
+            b.setIconSize(QSize(280, 150))
+            b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            b.setText(pal["name"].replace("&", "&&"))     # a single & would become a shortcut
+            low = pipeline.contrast(pal["ink"], pal["bg"]) < 7
+            b.setToolTip(pal["note"] + ("\n⚠ Text auf Hintergrund hat wenig Kontrast." if low else ""))
+            b.setStyleSheet("QToolButton { padding:6px; border:2px solid #2a2f39; border-radius:8px; }"
+                            "QToolButton:checked { border-color:#e6eaf0; background:#22262e; }")
+            b.toggled.connect(lambda on, i=i: on and self._picked(i))
+            b.installEventFilter(self)
+            note = QLabel(pal["note"])
+            note.setWordWrap(True)
+            note.setObjectName("dim")
+            note.setMaximumWidth(300)
+            cell = QVBoxLayout()
+            cell.addWidget(b, 0, Qt.AlignHCenter)
+            cell.addWidget(note)
+            grid.addLayout(cell, i // 2, i % 2)
+            self.cards.append(b)
+        v.addLayout(grid)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Übernehmen")
+        buttons.button(QDialogButtonBox.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        v.addWidget(buttons)
+        self.cards[0].setChecked(True)
+
+    def _picked(self, i):
+        self.choice = self.palettes[i]
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.MouseButtonDblClick and obj in self.cards:
+            obj.setChecked(True)
+            self.accept()
+            return True
+        return super().eventFilter(obj, ev)
+
+
 def path_row(edit, dialog):
     w = QWidget()
     h = QHBoxLayout(w)
@@ -450,11 +541,11 @@ class MainWindow(QMainWindow):
 
         # bottom action bar
         bar = QHBoxLayout()
-        self.btn_plan = QPushButton("① Prompts planen (agy)")
+        self.btn_plan = QPushButton("① Prompts planen (KI)")
         self.chk_overwrite = QCheckBox("vorhandene überschreiben")
         self.btn_images = QPushButton("② Fehlende Bilder")
         self.btn_images_all = QPushButton("Alle Bilder neu")
-        self.btn_check = QPushButton("Bilder prüfen (agy)")
+        self.btn_check = QPushButton("Bilder prüfen (KI)")
         self.btn_build = QPushButton("③ PDF bauen")
         self.btn_all = QPushButton("▶ Alles")
         self.btn_cancel = QPushButton("Abbrechen")
@@ -500,8 +591,8 @@ class MainWindow(QMainWindow):
         self.action_buttons = [self.btn_plan, self.btn_images, self.btn_images_all, self.btn_build,
                                self.btn_all, self.btn_preview, self.btn_regen, self.btn_replan,
                                self.btn_refine, self.btn_accept, self.btn_check, self.btn_check_one,
-                               self.btn_analyse, self.btn_cover_auto, self.btn_remove, self.btn_palette,
-                               self.btn_redo_seed, self.btn_redo_prompt] + self.review_buttons + self.compress_buttons \
+                               self.btn_analyse, self.btn_cover_auto, self.btn_remove, self.btn_redo_seed,
+                               self.btn_redo_prompt, self.btn_palettes] + self.review_buttons + self.compress_buttons \
             + self.lang_buttons
 
     def _scroll(self, widget):
@@ -520,7 +611,7 @@ class MainWindow(QMainWindow):
         self.cb_kind = QComboBox()
         for key, label in styles.CONTENT_TYPES.items():
             self.cb_kind.addItem(label, key)
-        self.cb_kind.setToolTip("Bestimmt, wie agy Bild-Prompts schreibt und Bilder bewertet: "
+        self.cb_kind.setToolTip("Bestimmt, wie die KI Bild-Prompts schreibt und Bilder bewertet: "
                                 "PnP-Regelwerk = Fantasy-/Rollenspiel-Szenen, Anderes Dokument = "
                                 "Motive passend zum Thema (Readme, Tutorial, Dokumentation …).")
         self.cb_kind.currentIndexChanged.connect(self._kind_changed)
@@ -536,8 +627,8 @@ class MainWindow(QMainWindow):
                           ("Kicker (über dem Titel)", self.ed_kicker), ("Tagline", self.ed_tagline),
                           ("Kopfzeile", self.ed_running), ("Kapitel-Label", self.ed_chlabel)]:
             f.addRow(label, ed)
-        self.btn_cover_auto = QPushButton("Alles automatisch ausfüllen (agy)")
-        self.btn_cover_auto.setToolTip("agy liest den Anfang des Regelwerks und schlägt Titel, Untertitel, "
+        self.btn_cover_auto = QPushButton("Alles automatisch ausfüllen (KI)")
+        self.btn_cover_auto.setToolTip("Die KI liest den Anfang des Regelwerks und schlägt Titel, Untertitel, "
                                        "Kicker, Tagline, Kopfzeile und Kapitel-Label vor.")
         self.btn_cover_auto.clicked.connect(self.run_cover_auto)
         f.addRow(self.btn_cover_auto)
@@ -576,15 +667,11 @@ class MainWindow(QMainWindow):
         f.addRow("Text", self.col_ink)
         f.addRow("Akzent (Überschriften)", self.col_accent)
         f.addRow("Akzent 2 (Kapitel, Initialen)", self.col_accent2)
-        self.btn_palette = QPushButton("Palette vorschlagen (agy)")
-        self.btn_palette.setToolTip("agy bekommt die Kurzfassung des Buchs, den aktuellen Stil-Suffix und den "
-                                    "Stilwunsch – nicht den ganzen Text – und schlägt alle vier Farben vor.")
-        self.btn_palette.clicked.connect(self.run_palette)
-        f.addRow(self.btn_palette)
-        self.lb_palette = QLabel()
-        self.lb_palette.setWordWrap(True)
-        self.lb_palette.setObjectName("dim")
-        f.addRow(self.lb_palette)
+        self.btn_palettes = QPushButton("4 Farbpaletten vorschlagen (KI)")
+        self.btn_palettes.setToolTip("Die KI schlägt vier Farbpaletten vor, die zum Thema des Regelwerks passen. "
+                                     "Du suchst dir eine aus, sie ersetzt die vier Farben oben.")
+        self.btn_palettes.clicked.connect(self.run_palettes)
+        f.addRow(self.btn_palettes)
         return w
 
     def _style_tab(self):
@@ -595,9 +682,9 @@ class MainWindow(QMainWindow):
         self.cb_preset.activated.connect(self._apply_preset)
         f.addRow("Vorlage", self.cb_preset)
         self.ed_wish = text_box(56)
-        f.addRow(self._field_head("Stilwunsch an agy", "wish", self.ed_wish))
+        f.addRow(self._field_head("Stilwunsch an die KI", "wish", self.ed_wish))
         self.ed_wish.setPlaceholderText("z.B. „soll aussehen wie One Piece“ oder „düster wie Dark Souls, aber farbig“")
-        self.btn_refine = QPushButton("Mit agy verfeinern")
+        self.btn_refine = QPushButton("Mit KI verfeinern")
         self.btn_refine.clicked.connect(self.run_refine)
         f.addRow(self.ed_wish)
         f.addRow(self.btn_refine)
@@ -612,12 +699,12 @@ class MainWindow(QMainWindow):
         f.addRow(self._field_head("Negativ-Prompt (Standard für alle Bilder)", "negative", self.ed_negative))
         f.addRow(self.ed_negative)
         self.ed_world = text_box(80)
-        self.world_head = self._field_head("Welt (von agy erkannt, für alle Prompts)", "world", self.ed_world)
+        self.world_head = self._field_head("Welt (von der KI erkannt, für alle Prompts)", "world", self.ed_world)
         f.addRow(self.world_head)
         f.addRow(self.ed_world)
         self.ed_summary = text_box(90)
-        self.ed_summary.setPlaceholderText("Wird beim ersten agy-Aufruf, der das Buch kennen muss, einmal geschrieben.")
-        f.addRow(self._field_head("Kurzfassung des Buchs (agy bekommt diese statt des Texts)", "summary",
+        self.ed_summary.setPlaceholderText("Wird beim ersten KI-Aufruf, der das Buch kennen muss, einmal geschrieben.")
+        f.addRow(self._field_head("Kurzfassung des Buchs (die KI bekommt diese statt des Texts)", "summary",
                                   self.ed_summary))
         f.addRow(self.ed_summary)
         hint = QLabel("Tipp: Stil ändern → Abschnitt wählen → „Vorschau“. Passt es, mit "
@@ -641,13 +728,13 @@ class MainWindow(QMainWindow):
         b = QPushButton("Komprimieren")
         b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         b.setObjectName("small")
-        b.setToolTip("agy entfernt Doppeltes, Widersprüche und Füllwörter, damit das Bildmodell den Text besser umsetzt")
+        b.setToolTip("Die KI entfernt Doppeltes, Widersprüche und Füllwörter, damit das Bildmodell den Text besser umsetzt")
         b.clicked.connect(lambda: self.run_compress(kind, edit))
         h.addWidget(b)
         s = QPushButton("Vorschlagen")
         s.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         s.setObjectName("small")
-        s.setToolTip("agy schlägt den Inhalt dieses Felds aus Buch, den anderen Feldern und dem gewählten "
+        s.setToolTip("Die KI schlägt den Inhalt dieses Felds aus Buch, den anderen Feldern und dem gewählten "
                      "Bildmodell vor")
         s.clicked.connect(lambda: self.run_suggest(kind, edit))
         h.addWidget(s)
@@ -705,8 +792,8 @@ class MainWindow(QMainWindow):
         self.cb_l_level = QComboBox()
         self.cb_l_level.addItems(["Automatisch", "# Kapitel / ## Abschnitte", "## Kapitel / ### Abschnitte"])
         f.addRow("Überschriften", self.cb_l_level)
-        self.btn_l_fill = QPushButton("Texte automatisch ausfüllen (agy)")
-        self.btn_l_fill.setToolTip("agy liest den Anfang der Übersetzung und schreibt Titel, Untertitel, Kicker, "
+        self.btn_l_fill = QPushButton("Texte automatisch ausfüllen (KI)")
+        self.btn_l_fill.setToolTip("Die KI liest den Anfang der Übersetzung und schreibt Titel, Untertitel, Kicker, "
                                    "Tagline, Kopfzeile und Kapitel-Label in deren Sprache.")
         self.btn_l_fill.clicked.connect(self.run_lang_cover_auto)
         self.btn_l_strip = QPushButton("Bilder aus dem Markdown entfernen…")
@@ -868,7 +955,7 @@ class MainWindow(QMainWindow):
         self.comfy_rows = range(comfy_first, f.rowCount())
         self.engine_form = f
 
-        f.addRow(section_label("Bildkontrolle (agy)"))
+        f.addRow(section_label("Bildkontrolle (KI)"))
         self.chk_qc = QCheckBox("Generierte Bilder automatisch prüfen")
         self.chk_qc_fix = QCheckBox("Unpassende Bilder korrigieren")
         self.sp_qc_rounds = QSpinBox()
@@ -876,7 +963,7 @@ class MainWindow(QMainWindow):
         self.sp_qc_rounds.setSuffix(" Versuch(e)")
         self.chk_qc_radical = QCheckBox("Nach 3 Fehlversuchen Konzept radikal neu (bis zu 3×3 Bilder)")
         self.chk_qc_radical.setToolTip(
-            "Bis zu 3 Bilder pro Konzept. Passt keins, schreibt agy den Prompt von Grund auf neu: anderes "
+            "Bis zu 3 Bilder pro Konzept. Passt keins, schreibt die KI den Prompt von Grund auf neu: anderes "
             "Hauptmotiv, anderer Ort, andere Perspektive, aber weiter passend zum Abschnitt. Insgesamt höchstens "
             "3 Konzepte mit je 3 Bildern. Die Zahl der Neuversuche gilt dann nicht.")
         self.chk_qc_radical.toggled.connect(lambda on: self.sp_qc_rounds.setEnabled(not on))
@@ -902,9 +989,9 @@ class MainWindow(QMainWindow):
         f.addRow("Strenge", row)
         f.addRow("", self.lb_qc_strict)
         self.qc_comfy_widgets = [self.sp_qc_rounds, self.chk_qc_radical]
-        qc_info = QLabel("agy sieht sich jedes Bild an und prüft, ob es zum Abschnitt passt (Motiv, "
-                         "Textartefakte, Anatomie). Dafür liest agy eine Bildkopie im Projektordner – "
-                         "der Ordner muss in agys trustedWorkspaces liegen. Kostet einen agy-Aufruf pro Bild.")
+        qc_info = QLabel("Die KI sieht sich jedes Bild an und prüft, ob es zum Abschnitt passt (Motiv, "
+                         "Textartefakte, Anatomie). Dafür liest sie eine Bildkopie im Projektordner – "
+                         "mit agy muss der Ordner in agys trustedWorkspaces liegen. Kostet einen KI-Aufruf pro Bild.")
         qc_info.setWordWrap(True)
         qc_info.setObjectName("dim")
         f.addRow(qc_info)
@@ -964,18 +1051,18 @@ class MainWindow(QMainWindow):
         g.addWidget(dice, 0, 3)
         v.addLayout(g)
         self.ed_hint = QLineEdit()
-        self.ed_hint.setPlaceholderText("Wunsch an agy für diesen Prompt, z.B. „eher Nacht, zwei Kämpfer“")
+        self.ed_hint.setPlaceholderText("Wunsch an die KI für diesen Prompt, z.B. „eher Nacht, zwei Kämpfer“")
         v.addWidget(self.ed_hint)
         row = QHBoxLayout()
-        self.btn_replan = QPushButton("Prompt neu (agy)")
+        self.btn_replan = QPushButton("Prompt neu (KI)")
         self.btn_preview = QPushButton("Vorschau")
         self.btn_accept = QPushButton("Übernehmen")
-        self.btn_analyse = QPushButton("Analysieren (agy)")
-        self.btn_analyse.setToolTip("agy sieht sich das Bild an und verbessert Prompt und Negativ-Prompt "
+        self.btn_analyse = QPushButton("Analysieren (KI)")
+        self.btn_analyse.setToolTip("Die KI sieht sich das Bild an und verbessert Prompt und Negativ-Prompt "
                                     "(berücksichtigt den Wunsch oben)")
         self.btn_analyse.clicked.connect(self.run_analyse)
         self.btn_check_one = QPushButton("Prüfen")
-        self.btn_check_one.setToolTip("Dieses Bild mit agy prüfen")
+        self.btn_check_one.setToolTip("Dieses Bild von der KI prüfen lassen")
         self.btn_check_one.clicked.connect(self.run_check_one)
         self.btn_remove = QPushButton("Bild entfernen")
         self.btn_remove.setToolTip("Entfernt das Bild (oder alle markierten, Strg/Umschalt-Klick in der Liste), "
@@ -1467,7 +1554,7 @@ class MainWindow(QMainWindow):
         if self._ready():
             force = self.chk_overwrite.isChecked()
             self._start(lambda ctx: pipeline.plan(self.project, ctx, force=force),
-                        on_done=lambda _: self._after_change(), label="Plane Prompts mit agy …")
+                        on_done=lambda _: self._after_change(), label="Plane Prompts mit der KI …")
 
     def _confirm_all_images(self):
         if QMessageBox.question(self, "Alle Bilder neu",
@@ -1487,20 +1574,20 @@ class MainWindow(QMainWindow):
         current = {"world": self.ed_world.toPlainText().strip(), "style": self.ed_style.toPlainText().strip(),
                    "negative": self.ed_negative.toPlainText().strip(), "style wish": self.ed_wish.toPlainText().strip()}
         if edit.toPlainText().strip() and QMessageBox.question(
-                self, "Vorschlagen", "Der bisherige Text dieses Felds wird durch den Vorschlag von agy ersetzt. "
+                self, "Vorschlagen", "Der bisherige Text dieses Felds wird durch den Vorschlag der KI ersetzt. "
                 "Fortfahren?") != QMessageBox.Yes:
             return
 
         def done(r):
             if not r["text"]:
-                self._log("agy lieferte keinen Vorschlag.")
+                self._log("Die KI lieferte keinen Vorschlag.")
                 return
             edit.setPlainText(r["text"])
             self._log(f"Vorschlag ({kind}): {r['text']}" + (f"  – {r['note']}" if r["note"] else ""))
             self._collect()
             self.project.save()
         self._start(lambda ctx: pipeline.suggest_field(self.project, kind, current), on_done=done,
-                    label="agy macht einen Vorschlag …")
+                    label="Die KI macht einen Vorschlag …")
 
     def run_compress(self, kind, edit):
         text = edit.toPlainText().strip()
@@ -1515,7 +1602,7 @@ class MainWindow(QMainWindow):
                 self._collect()
                 self.project.save()
             self._start(lambda ctx: pipeline.compress_field(self.project, kind, text), on_done=done,
-                        label="agy komprimiert …")
+                        label="Die KI komprimiert …")
 
     def run_analyse(self):
         s = self._current_slot()
@@ -1532,26 +1619,26 @@ class MainWindow(QMainWindow):
             self.slot_prompt.setPlainText(r["prompt"].strip())
             self.slot_negative.setPlainText(r["negative"].strip())
             self.chk_include_style.setChecked(True)
-            self.qc_label.setText(f"<span style='color:#8ab4f8'>agy: {r['analysis']}</span>")
+            self.qc_label.setText(f"<span style='color:#8ab4f8'>KI: {r['analysis']}</span>")
             self._store_slot_edits()
             self.project.save_manifest()
             self._log(f"Analyse „{s.title}“: {r['analysis']}")
             self._log("Prompt und Negativ-Prompt angepasst – mit „Vorschau“ testen.")
         self._start(lambda ctx: pipeline.analyse(self.project, s.key, wish), on_done=done,
-                    label=f"agy analysiert „{s.title}“ …")
+                    label=f"Die KI analysiert „{s.title}“ …")
 
     def run_check(self):
         if self._ready():
             fix = self.chk_qc_fix.isChecked()
             self._start(lambda ctx: pipeline.check(self.project, ctx, fix=fix),
                         on_done=lambda _: self._refresh_slots(),
-                        label="agy prüft die Bilder …" + (" (unpassende werden neu generiert)" if fix else ""))
+                        label="Die KI prüft die Bilder …" + (" (unpassende werden neu generiert)" if fix else ""))
 
     def run_check_one(self):
         s = self._current_slot()
         if s and self._ready() and self.project.has_image(s.key):
             self._start(lambda ctx: pipeline.check(self.project, ctx, keys={s.key}, fix=False),
-                        on_done=lambda _: self._refresh_slots(), label=f"agy prüft „{s.title}“ …")
+                        on_done=lambda _: self._refresh_slots(), label=f"Die KI prüft „{s.title}“ …")
 
     def run_build(self, langs=None):
         """Build the PDFs of all enabled languages (or only `langs`)."""
@@ -1611,7 +1698,7 @@ class MainWindow(QMainWindow):
                 self._collect()
                 self.project.save()
             self._start(lambda ctx: pipeline.refine_style(self.project, wish), on_done=done,
-                        label="agy verfeinert den Stilwunsch …")
+                        label="Die KI verfeinert den Stilwunsch …")
 
     def run_cover_auto(self):
         if not self._ready():
@@ -1621,7 +1708,7 @@ class MainWindow(QMainWindow):
                   (self.ed_chlabel, "chapter_label")]
         current = {key: ed.text().strip() for ed, key in fields}
         if any(current.values()) and QMessageBox.question(
-                self, "Cover & Kopfzeile", "Die bisherigen Einträge werden durch die Vorschläge von agy "
+                self, "Cover & Kopfzeile", "Die bisherigen Einträge werden durch die Vorschläge der KI "
                 "ersetzt. Fortfahren?") != QMessageBox.Yes:
             return
 
@@ -1632,26 +1719,27 @@ class MainWindow(QMainWindow):
             self._collect()
             self.project.save()
         self._start(lambda ctx: pipeline.suggest_cover(self.project, current), on_done=done,
-                    label="agy füllt Cover & Kopfzeile aus …")
+                    label="Die KI füllt Cover & Kopfzeile aus …")
 
-    def run_palette(self):
+    def run_palettes(self):
         if not self._ready():
             return
-        old = {k: self.project.config["theme"][k] for k in ("bg", "ink", "accent", "accent2")}
 
-        def done(r):
-            self.col_bg.set_color(r["bg"])
-            self.col_ink.set_color(r["ink"])
-            self.col_accent.set_color(r["accent"])
-            self.col_accent2.set_color(r["accent2"])
-            self._apply_accent(r["accent"])
-            self.lb_palette.setText(r.get("note", ""))
-            self._log(f"Palette: Hintergrund {r['bg']}, Text {r['ink']}, Akzent {r['accent']}, Akzent 2 "
-                      f"{r['accent2']} (vorher: {', '.join(old.values())})")
+        def done(palettes):
+            dlg = PaletteDialog(palettes, self)
+            if dlg.exec() != QDialog.Accepted or not dlg.choice:
+                return
+            pal = dlg.choice
+            for button, key in [(self.col_bg, "bg"), (self.col_ink, "ink"), (self.col_accent, "accent"),
+                                (self.col_accent2, "accent2")]:
+                button.set_color(pal[key])
+            self._apply_accent(pal["accent"])
             self._collect()
             self.project.save()
-        self._start(lambda ctx: pipeline.suggest_palette(self.project), on_done=done,
-                    label="agy schlägt eine Palette vor …")
+            self._log(f"Farbpalette „{pal['name']}“ übernommen: {pal['bg']} · {pal['ink']} · "
+                      f"{pal['accent']} · {pal['accent2']}" + (f" – {pal['note']}" if pal["note"] else ""))
+        self._start(lambda ctx: pipeline.suggest_palettes(self.project), on_done=done,
+                    label="Die KI schlägt Farbpaletten vor …")
 
     def _kind(self):
         return self.cb_kind.currentData() or "rulebook"
@@ -1665,8 +1753,8 @@ class MainWindow(QMainWindow):
         self.cb_preset.addItems([styles.CUSTOM] + list(styles.presets_for(self._kind())))
         self.cb_preset.setCurrentText(keep if keep in styles.presets_for(self._kind()) else styles.CUSTOM)
         self.cb_preset.blockSignals(False)
-        self.world_head.label.setText("Thema (von agy erkannt, für alle Prompts)" if doc
-                                      else "Welt (von agy erkannt, für alle Prompts)")
+        self.world_head.label.setText("Thema (von der KI erkannt, für alle Prompts)" if doc
+                                      else "Welt (von der KI erkannt, für alle Prompts)")
         self.ed_wish.setPlaceholderText(
             "z.B. „technische Blaupause“ oder „freundliche Flat-Illustrationen in Blau“" if doc else
             "z.B. „soll aussehen wie One Piece“ oder „düster wie Dark Souls, aber farbig“")
@@ -1676,7 +1764,7 @@ class MainWindow(QMainWindow):
         if self.project:
             self.project.config["content_type"] = self._kind()
             self._log("Inhalt: " + styles.CONTENT_TYPES[self._kind()] +
-                      " – neue Prompts und Bildbewertungen von agy richten sich danach "
+                      " – neue Prompts und Bildbewertungen der KI richten sich danach "
                       "(vorhandene Prompts bleiben; zum Ersetzen „Prompts planen“ mit „vorhandene überschreiben“).")
 
     def _apply_preset(self):
@@ -1694,7 +1782,7 @@ class MainWindow(QMainWindow):
             hint = self.ed_hint.text().strip()
             self._start(lambda ctx: pipeline.replan_one(self.project, s.key, hint),
                         on_done=lambda p: (self.slot_prompt.setPlainText(p), self.chk_include_style.setChecked(True)),
-                        label=f"agy schreibt neuen Prompt für „{s.title}“ …")
+                        label=f"Die KI schreibt neuen Prompt für „{s.title}“ …")
 
     def run_preview(self):
         s = self._current_slot()
@@ -1932,8 +2020,8 @@ class MainWindow(QMainWindow):
             return
         current = {key: ed.text().strip() for key, ed in self.l_fields.items()}
         if any(current.values()) and QMessageBox.question(
-                self, "Texte ausfüllen", "Die bisherigen Einträge dieser Sprache werden durch die Vorschläge von "
-                "agy ersetzt. Fortfahren?") != QMessageBox.Yes:
+                self, "Texte ausfüllen", "Die bisherigen Einträge dieser Sprache werden durch die Vorschläge der "
+                "KI ersetzt. Fortfahren?") != QMessageBox.Yes:
             return
 
         def done(r):
@@ -1945,7 +2033,7 @@ class MainWindow(QMainWindow):
             self._collect()
             self.project.save()
         self._start(lambda ctx: pipeline.suggest_cover(self.project, current, code), on_done=done,
-                    label=f"agy füllt Cover & Kopfzeile ({code}) aus …")
+                    label=f"Die KI füllt Cover & Kopfzeile ({code}) aus …")
 
     def _pick_lang_source(self):
         p, _ = QFileDialog.getOpenFileName(self, "Markdown der Übersetzung", self.ed_l_source.text(),
@@ -2116,7 +2204,7 @@ class MainWindow(QMainWindow):
         current = self.cb_agy.currentText()
         models = planner.list_models()
         if not models:
-            QMessageBox.warning(self, "agy", "agy-Modelle konnten nicht geladen werden.")
+            QMessageBox.warning(self, "Modelle", "Die Modelle konnten nicht geladen werden.")
             return
         self.cb_agy.clear()
         self.cb_agy.addItems(models)

@@ -386,7 +386,7 @@ Put the description itself into "image_prompt" - not a note that you wrote it.
         if _real_prompt(text):
             return text
         prompt += "\n\nYour last answer was a status message, not an image description. Return the description."
-    raise AgyError(f"agy lieferte keine Bildbeschreibung, sondern: „{text[:120]}“")
+    raise AgyError(f"Die KI lieferte keine Bildbeschreibung, sondern: „{text[:120]}“")
 
 
 def _run_on_image(image_path, work_dir, prompt, schema, model=None):
@@ -626,28 +626,33 @@ near-black background, and explain your choice in one short sentence (German).""
     return run(prompt, schema, model)
 
 
-def suggest_palette(summary, title, style, wish, current, model=None, kind="rulebook"):
-    """Four PDF layout colors (page background, text, two accents) for the book and its art style.
+def suggest_palettes(summary, title, style, wish, current, model=None, kind="rulebook"):
+    """Four different color palettes (bg, ink, accent, accent2) for the PDF layout that fit the book's topic.
     Gets the summary of the book and the style the user wants, never the book text."""
     pr = profile(kind)
-    prompt = f"""You choose the color palette of an illustrated {pr['noun']} PDF.
-Book title: {title or '(unknown)'}
+    prompt = f"""You design the color palette for the PDF layout of a {pr['noun']}.
+Book title: {title or '(none)'}
 Summary of the book: {summary or '(none)'}
-Art style of all illustrations (applied to every image; the palette must go with it): {style or '(none yet)'}
+Art style of the illustrations (applied to every image; the palettes must go with it): {style or '(none)'}
 {('The user wants this look: ' + wish) if wish else ''}
-Colors the layout has now: {current}
+Current palette: {current}
 
-The PDF has dark pages: light text on a dark background, accent colors for headings, chapter numbers,
-initials and rules. Pick colors that echo the illustrations' palette and the mood of the book:
-- bg: the page color, very dark (it may carry a hint of the book's hue, no pure black needed).
-- ink: the body text color, light, easy to read on bg (contrast at least 7:1).
-- accent: headings and highlights, clearly distinct from the text color, at least 4.5:1 on bg.
-- accent2: a second accent for chapter numbers and initials that works next to accent.
-Hex colors only (#rrggbb). note: one short German sentence on why this palette fits."""
-    schema = {"type": "object", "properties": {
-        "bg": {"type": "string"}, "ink": {"type": "string"}, "accent": {"type": "string"},
-        "accent2": {"type": "string"}, "note": {"type": "string"}},
-        "required": ["bg", "ink", "accent", "accent2", "note"]}
+Propose exactly 4 palettes that fit the topic and mood of this {pr['book']}. Make them clearly different from
+each other (different hue families and moods), not four variations of one idea.
+Every palette has:
+- name: 2-4 German words that name the mood (for example "Neon-Boxengasse").
+- bg: the page background. It must be very dark (near black, lightness below 12%), it may be tinted
+  towards the palette's mood. The layout is built for dark pages.
+- ink: the body text color, light and easy to read on bg (contrast at least 10:1).
+- accent: headings, tables, links. Clearly readable on bg (contrast at least 4.5:1).
+- accent2: chapter labels, initials and rule lines. Readable on bg and clearly different from accent.
+- note: one short German sentence why it fits the {pr['book']}.
+All colors as #rrggbb hex."""
+    item = {"type": "object", "properties": {k: {"type": "string"} for k in (
+        "name", "bg", "ink", "accent", "accent2", "note")},
+        "required": ["name", "bg", "ink", "accent", "accent2", "note"]}
+    schema = {"type": "object", "properties": {"palettes": {"type": "array", "items": item}},
+              "required": ["palettes"]}
     return run(prompt, schema, model)
 
 

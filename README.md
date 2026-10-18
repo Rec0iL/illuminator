@@ -101,7 +101,7 @@ The first LLM function that needs to know the book (planning, style/world sugges
 
 - **Plan prompts** (world, style, cover, background): outline + summary. Chapter and section prompts still need the real chapter text.
 - **Suggest** next to world/style/negative/wish: outline + summary + the other fields.
-- **Book → Suggest palette (agy)**: summary + current style suffix + style wish + current colors, nothing else. Returns background, text and two accent colors; contrast is repaired if needed (the theme is dark). Previous values are printed in the log.
+- **Book → Suggest 4 color palettes**: summary + current style suffix + style wish + current colors, nothing else. A dialog shows the palettes; contrast is repaired if needed (the theme is dark).
 - Cover texts still read the real start of the text (they must quote it).
 
 ## Content type: tabletop rulebook or other document

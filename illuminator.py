@@ -3,11 +3,11 @@
 
   python3 illuminator.py gui [PROJEKT]              Oberfläche starten
   python3 illuminator.py new PROJEKT QUELLE          Projekt anlegen (md, docx, pdf, txt), --type document für Readme/Tutorial
-  python3 illuminator.py plan PROJEKT [--force]      Bild-Prompts mit agy schreiben
+  python3 illuminator.py plan PROJEKT [--force]      Bild-Prompts mit der KI schreiben
   python3 illuminator.py images PROJEKT [--all]      Fehlende (oder alle) Bilder generieren
   python3 illuminator.py edit PROJEKT KEY "Anweisung"  Bild per Gemini bearbeiten (Interaction-Kette)
   python3 illuminator.py check PROJEKT [--no-fix] [--strictness 1|2|3]
-                                                      Bilder mit agy prüfen (und unpassende neu machen)
+                                                      Bilder von der KI prüfen lassen (und unpassende neu machen)
   python3 illuminator.py restructure PROJEKT ORIGINAL.pdf
                                                       Überschriften-Ebenen nach dem Original-PDF richten
   python3 illuminator.py build PROJEKT [--lang xx]   PDFs setzen (alle Sprachen, oder nur xx)

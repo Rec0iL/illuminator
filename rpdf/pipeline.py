@@ -156,7 +156,7 @@ def ensure_summary(project, ctx=None, doc=None, force=False):
         return cfg["summary"].strip()
     doc = doc or project.document()
     if ctx:
-        ctx.log("agy: kurze Zusammenfassung des Buchs (einmalig) …")
+        ctx.log("KI: kurze Zusammenfassung des Buchs (einmalig) …")
     cfg["summary"] = planner.summarize(cfg.get("title") or doc.title or "", _outline(doc), _excerpts(doc),
                                        cfg["agy"].get("model") or None, _kind(project))
     project.save()
@@ -186,7 +186,7 @@ def plan(project, ctx, force=False, keys=None, suggest_style=None):
 
     if need_global:
         summary = ensure_summary(project, ctx, doc)
-        ctx.log("agy: Welt, Stil, Cover und Hintergrund …")
+        ctx.log("KI: Welt, Stil, Cover und Hintergrund …")
         g = planner.plan_global(_outline(doc), summary, cfg.get("title") or doc.title or "", model, _kind(project))
         cfg["world"] = g["world"]
         if suggest_style or (suggest_style is None and not cfg.get("style")):
@@ -218,7 +218,7 @@ def plan(project, ctx, force=False, keys=None, suggest_style=None):
                 got.update(planner.plan_chapter(chapters[ck], pending, _world(project), model,
                                                   project.config.get('style', ''), _kind(project)))
             except planner.AgyError as e:
-                ctx.log(f"agy-Fehler bei „{title}“: {e}")
+                ctx.log(f"KI-Fehler bei „{title}“: {e}")
             pending = [s for s in chapter_slots if s.key not in got]
             if not pending:
                 break
@@ -231,7 +231,7 @@ def plan(project, ctx, force=False, keys=None, suggest_style=None):
                                               kind=_kind(project))
                 pending.remove(s)
             except planner.AgyError as e:
-                ctx.log(f"agy-Fehler bei „{s.title}“: {e}")
+                ctx.log(f"KI-Fehler bei „{s.title}“: {e}")
         for key, prompt in got.items():
             project.entry(key).update(prompt=prompt, include_style=True)
         ctx.log(f"Prompts für „{title}“: {len(got)}/{len(chapter_slots)}"
@@ -315,7 +315,7 @@ def redo_rejected(project, ctx, new_prompts=False):
                 prompt = planner.plan_single(s, _world(project), model, _redo_hint(e),
                                              project.config.get("style", ""), _kind(project))
             except planner.AgyError as err:
-                ctx.log(f"    {project.config.get('llm', 'agy')}-Fehler, alter Prompt bleibt: {err}")
+                ctx.log(f"    KI-Fehler, alter Prompt bleibt: {err}")
                 continue
             e.update(prompt=prompt, include_style=True)
             project.save_manifest()
@@ -477,7 +477,7 @@ def _check_and_fix(project, client, cfg, slot, ctx, fix, rounds, radical=False, 
                     prompt = planner.plan_single(slot, _world(project), model, "", project.config.get("style", ""),
                                                  _kind(project), avoid=failed)
                 except planner.AgyError as err:
-                    ctx.log(f"    agy konnte kein neues Konzept liefern: {err}")
+                    ctx.log(f"    Die KI konnte kein neues Konzept liefern: {err}")
                     return False
                 e.update(prompt=prompt, include_style=True, seed=random.randint(1, 2**31 - 1))
             else:
@@ -542,17 +542,44 @@ def suggest_field(project, field, current):
                                  project.config["agy"].get("model") or None, _kind(project))
 
 
-def suggest_palette(project):
-    """agy proposes the four layout colors (bg, ink, accent, accent2) from the summary of the book, the
-    current style suffix and style wish. Returns the repaired palette plus a note."""
+PALETTE_KEYS = ("bg", "ink", "accent", "accent2")
+
+
+def _hex(value):
+    """'#abc' / 'ABCDEF' / '#a1b2c3' -> '#a1b2c3', anything else -> None."""
+    v = str(value or "").strip().lstrip("#")
+    if len(v) == 3:
+        v = "".join(c * 2 for c in v)
+    return "#" + v.lower() if len(v) == 6 and all(c in "0123456789abcdefABCDEF" for c in v) else None
+
+
+def contrast(fg, bg):
+    """WCAG contrast ratio of two #rrggbb colors (1 … 21)."""
+    def lum(h):
+        c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    a, b = sorted((lum(fg), lum(bg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+def suggest_palettes(project):
+    """The LLM proposes 4 color palettes for the layout: [{name, note, bg, ink, accent, accent2}].
+    It gets the summary of the book, the style suffix and the style wish, not the book text. Palettes with
+    invalid colors are dropped; contrast the LLM got wrong is repaired for the dark pages."""
     cfg = project.config
-    summary = ensure_summary(project)
-    r = planner.suggest_palette(summary, cfg.get("title", ""), cfg.get("style", ""), cfg.get("style_wish", ""),
-                                {k: cfg["theme"][k] for k in ("bg", "ink", "accent", "accent2")},
-                                cfg["agy"].get("model") or None, _kind(project))
-    palette = styles.fit_palette(r, cfg["theme"])
-    palette["note"] = str(r.get("note", "")).strip()
-    return palette
+    r = planner.suggest_palettes(ensure_summary(project), cfg.get("title", ""), cfg.get("style", ""),
+                                 cfg.get("style_wish", ""), {k: cfg["theme"][k] for k in PALETTE_KEYS},
+                                 cfg["agy"].get("model") or None, _kind(project))
+    out = []
+    for p in r.get("palettes", []):
+        colors = {k: _hex(p.get(k)) for k in PALETTE_KEYS}
+        if all(colors.values()):
+            out.append({"name": str(p.get("name", "")).strip() or f"Palette {len(out) + 1}",
+                        "note": str(p.get("note", "")).strip(), **styles.fit_palette(colors, cfg["theme"])})
+    if not out:
+        raise planner.AgyError("Die KI lieferte keine brauchbare Farbpalette.")
+    return out[:4]
 
 
 COVER_KEYS = ("title", "subtitle", "kicker", "tagline", "running_title", "chapter_label")
