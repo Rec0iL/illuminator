@@ -6,23 +6,38 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QPalette, QPixmap
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette,
+                           QPen, QPixmap)
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter,
-    QMenu, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
+    QMenu, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget, QToolBar, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from . import comfy, importer, models, pipeline, planner, styles
-from .project import DEFAULTS, LANG_NAMES, TEXT_KEYS, Project, clean_lang, create, lang_label
+from .project import (AI_FLAG, AI_OK, APPROVED, DEFAULTS, LANG_NAMES, NEEDS_REDO, REJECTED, TEXT_KEYS, Project,
+                      clean_lang, create, lang_label)
 
 TW, TH = 190, 84   # thumbnail size
 RECENT_MAX = 10
 KIND_LABEL = {"cover": "Cover", "background": "Hintergrund", "chapter": "Kapitel", "section": "Abschnitt",
               "filler": "Füllbild"}
+STATUS_ROLE = Qt.UserRole + 1     # review status of a list item; None = no image, no badge
+BADGE = 24
+STATUS_TEXT = {APPROVED: "von dir freigegeben", REJECTED: "von dir abgelehnt", AI_OK: "KI-Prüfung: passt",
+               AI_FLAG: "KI-Prüfung: auffällig", "": "noch nicht bewertet"}
+STATUS_COLOR = {APPROVED: "#2fb35a", REJECTED: "#e04848", AI_OK: "#3d8bfd", AI_FLAG: "#f08c00"}
+STRICTNESS_HELP = {
+    3: "Streng: das Bild muss dem Prompt genau folgen (bisheriges Verhalten).",
+    2: "Mittel: das Motiv darf vom Prompt abweichen, das Bild muss aber klar zum Abschnitt passen und "
+       "brauchbar sein.",
+    1: "Locker: nur kaputte Bilder (Artefakte, verzerrte Schrift, verformte Figuren) oder klar themenfremde "
+       "werden abgelehnt.",
+}
 WORKFLOW_DEFAULTS = {
     "anima": {"cfg": 4.0, "sampler": "euler", "scheduler": "simple", "steps": 28},
     "checkpoint": {"cfg": 6.0, "sampler": "dpmpp_2m", "scheduler": "karras", "steps": 28},
@@ -105,6 +120,84 @@ class ImageView(QLabel):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._rescale()
+
+
+def paint_badge(p, r, status):
+    """Review badge like in Minesweeper. The user's verdicts are round (green check, red X), the AI's are
+    square (blue check, orange flag), unreviewed is an empty ring."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    r = QRectF(r).adjusted(1, 1, -1, -1)
+    color = STATUS_COLOR.get(status)
+    if color is None:
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.8, Qt.DashLine))
+        p.setBrush(QColor(0, 0, 0, 170))
+        p.drawEllipse(r)
+        p.restore()
+        return
+    p.setPen(QPen(QColor(0, 0, 0, 160), 1))
+    p.setBrush(QColor(color))
+    if status in (APPROVED, REJECTED):
+        p.drawEllipse(r)
+    else:
+        p.drawRoundedRect(r, 4, 4)
+    x, y, w = r.x(), r.y(), r.width()
+    pt = lambda fx, fy: QPointF(x + fx * w, y + fy * w)
+    p.setPen(QPen(QColor("#ffffff"), max(2.0, w / 9), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.setBrush(Qt.NoBrush)
+    if status in (APPROVED, AI_OK):
+        path = QPainterPath(pt(0.26, 0.52))
+        path.lineTo(pt(0.43, 0.69))
+        path.lineTo(pt(0.75, 0.33))
+        p.drawPath(path)
+    elif status == REJECTED:
+        p.drawLine(pt(0.31, 0.31), pt(0.69, 0.69))
+        p.drawLine(pt(0.69, 0.31), pt(0.31, 0.69))
+    else:   # AI flag
+        p.drawLine(pt(0.34, 0.22), pt(0.34, 0.80))
+        flag = QPainterPath(pt(0.36, 0.22))
+        flag.lineTo(pt(0.76, 0.37))
+        flag.lineTo(pt(0.36, 0.52))
+        flag.closeSubpath()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#ffffff"))
+        p.drawPath(flag)
+    p.restore()
+
+
+def badge_pixmap(status, size=BADGE):
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    paint_badge(p, QRect(0, 0, size, size), status)
+    p.end()
+    return pm
+
+
+class StatusDelegate(QStyledItemDelegate):
+    """Draws the review badge in the corner of each thumbnail; a click on it emits `clicked(row)`."""
+    clicked = Signal(int)
+
+    def _badge_rect(self, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        icon = style.subElementRect(QStyle.SE_ItemViewItemDecoration, opt, opt.widget)
+        return QRect(icon.right() - BADGE - 3, icon.top() + 3, BADGE, BADGE)
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        status = index.data(STATUS_ROLE)
+        if status is not None:
+            paint_badge(painter, self._badge_rect(option, index), status)
+
+    def editorEvent(self, event, model, option, index):
+        if (event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton
+                and index.data(STATUS_ROLE) is not None
+                and self._badge_rect(option, index).contains(event.position().toPoint())):
+            self.clicked.emit(index.row())
+            return True
+        return super().editorEvent(event, model, option, index)
 
 
 def path_row(edit, dialog):
@@ -322,6 +415,11 @@ class MainWindow(QMainWindow):
         self.slot_list.setWordWrap(True)
         self.slot_list.setSpacing(4)
         self.slot_list.currentRowChanged.connect(self._on_row_changed)
+        self.status_delegate = StatusDelegate(self.slot_list)
+        self.status_delegate.clicked.connect(self._badge_clicked)
+        self.slot_list.setItemDelegate(self.status_delegate)
+        self.slot_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.slot_list.customContextMenuRequested.connect(self._list_menu)
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -377,12 +475,34 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.progress, 1)
         bar.addWidget(self.btn_cancel)
         outer.addLayout(bar)
+
+        # second row: everything rejected (red X from you, flag from the AI) made again
+        bar = QHBoxLayout()
+        self.lb_rejected = QLabel()
+        self.lb_rejected.setObjectName("dim")
+        self.btn_redo_seed = QPushButton("Neue Bilder, neue Seeds")
+        self.btn_redo_seed.setToolTip("Alle abgelehnten Bilder (rotes ✗ und KI-Flagge) mit gleichem Prompt und "
+                                      "neuem Seed neu generieren. Grün und blau abgehakte bleiben.")
+        self.btn_redo_prompt = QPushButton("Neue Prompts + neue Bilder")
+        self.btn_redo_prompt.setToolTip("Für alle abgelehnten Bilder (rotes ✗ und KI-Flagge) einen neuen Prompt "
+                                        "schreiben lassen und mit neuem Seed neu generieren. Grün und blau "
+                                        "abgehakte bleiben.")
+        self.btn_redo_seed.clicked.connect(lambda: self.run_redo(False))
+        self.btn_redo_prompt.clicked.connect(lambda: self.run_redo(True))
+        legend = QLabel("Klick auf das Symbol am Bild: freigeben → ablehnen → zurücksetzen")
+        legend.setObjectName("dim")
+        for w in (self.lb_rejected, self.btn_redo_seed, self.btn_redo_prompt):
+            bar.addWidget(w)
+        bar.addStretch(1)
+        bar.addWidget(legend)
+        outer.addLayout(bar)
         self.setCentralWidget(root)
         self.action_buttons = [self.btn_plan, self.btn_images, self.btn_images_all, self.btn_build,
                                self.btn_all, self.btn_preview, self.btn_regen, self.btn_replan,
                                self.btn_refine, self.btn_accept, self.btn_check, self.btn_check_one,
                                self.btn_analyse, self.btn_cover_auto, self.btn_remove, self.btn_palette,
-                               ] + self.compress_buttons + self.lang_buttons
+                               self.btn_redo_seed, self.btn_redo_prompt] + self.review_buttons + self.compress_buttons \
+            + self.lang_buttons
 
     def _scroll(self, widget):
         s = QScrollArea()
@@ -764,6 +884,23 @@ class MainWindow(QMainWindow):
         f.addRow("", self.chk_qc_fix)
         f.addRow("Neuversuche", self.sp_qc_rounds)
         f.addRow("", self.chk_qc_radical)
+        self.sl_qc_strict = QSlider(Qt.Horizontal)
+        self.sl_qc_strict.setRange(1, 3)
+        self.sl_qc_strict.setPageStep(1)
+        self.sl_qc_strict.setTickPosition(QSlider.TicksBelow)
+        self.sl_qc_strict.setTickInterval(1)
+        self.lb_qc_strict = QLabel()
+        self.lb_qc_strict.setWordWrap(True)
+        self.lb_qc_strict.setObjectName("dim")
+        self.sl_qc_strict.valueChanged.connect(lambda v: self.lb_qc_strict.setText(STRICTNESS_HELP[v]))
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(QLabel("locker"))
+        h.addWidget(self.sl_qc_strict, 1)
+        h.addWidget(QLabel("streng"))
+        f.addRow("Strenge", row)
+        f.addRow("", self.lb_qc_strict)
         self.qc_comfy_widgets = [self.sp_qc_rounds, self.chk_qc_radical]
         qc_info = QLabel("agy sieht sich jedes Bild an und prüft, ob es zum Abschnitt passt (Motiv, "
                          "Textartefakte, Anatomie). Dafür liest agy eine Bildkopie im Projektordner – "
@@ -790,10 +927,26 @@ class MainWindow(QMainWindow):
         self.slot_title.setWordWrap(True)
         self.slot_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         v.addWidget(self.slot_title)
+        row = QHBoxLayout()
+        self.status_icon = QLabel()
+        self.status_icon.setFixedSize(BADGE, BADGE)
+        row.addWidget(self.status_icon, 0, Qt.AlignTop)
         self.qc_label = QLabel()
         self.qc_label.setWordWrap(True)
         self.qc_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        v.addWidget(self.qc_label)
+        row.addWidget(self.qc_label, 1)
+        self.review_buttons = []
+        for text, verdict, tip in [("✓ Freigeben", APPROVED, "Bild freigeben (grüner Haken) – gilt vor der KI-Prüfung"),
+                                   ("✗ Ablehnen", REJECTED, "Bild ablehnen (rotes ✗) – wird mit „Neue Bilder …“ "
+                                                            "neu gemacht"),
+                                   ("Zurücksetzen", "", "Deine Bewertung entfernen, dann gilt wieder die KI-Prüfung")]:
+            b = QPushButton(text)
+            b.setObjectName("small")
+            b.setToolTip(tip + ". Gilt für alle markierten Bilder.")
+            b.clicked.connect(lambda _=False, v=verdict: self._set_review(v))
+            row.addWidget(b, 0, Qt.AlignTop)
+            self.review_buttons.append(b)
+        v.addLayout(row)
         self.slot_prompt = text_box(96)
         self.slot_prompt.setPlaceholderText("Motiv (englisch) – der Stil-Suffix wird angehängt")
         v.addWidget(self.slot_prompt)
@@ -910,6 +1063,8 @@ class MainWindow(QMainWindow):
         self.chk_qc_fix.setChecked(qc.get("auto_fix", True))
         self.sp_qc_rounds.setValue(int(qc.get("rounds", 1)))
         self.chk_qc_radical.setChecked(qc.get("radical", False))
+        self.sl_qc_strict.setValue(pipeline.qc_strictness(self.project))
+        self.lb_qc_strict.setText(STRICTNESS_HELP[self.sl_qc_strict.value()])
         t = c["theme"]
         self.col_bg.set_color(t["bg"])
         self.col_ink.set_color(t["ink"])
@@ -972,7 +1127,8 @@ class MainWindow(QMainWindow):
                            justify=self.chk_justify.isChecked(), font_size_pt=round(self.sp_font.value(), 2),
                            fill_gaps=self.chk_fill.isChecked(), filler_min_mm=self.sp_fill.value())
         c.setdefault("qc", {}).update(enabled=self.chk_qc.isChecked(), auto_fix=self.chk_qc_fix.isChecked(),
-                                      rounds=self.sp_qc_rounds.value(), radical=self.chk_qc_radical.isChecked())
+                                      rounds=self.sp_qc_rounds.value(), radical=self.chk_qc_radical.isChecked(),
+                                      strictness=self.sl_qc_strict.value())
         c["theme"].update(bg=self.col_bg.color, ink=self.col_ink.color,
                           accent=self.col_accent.color, accent2=self.col_accent2.color)
         preset = self.cb_preset.currentText()
@@ -1086,27 +1242,44 @@ class MainWindow(QMainWindow):
         for s in self.slots:
             has = self.project.has_image(s.key)
             prompt = bool(self.project.entry(s.key).get("prompt"))
-            qc = self.project.entry(s.key).get("qc")
             mark = "" if has else ("  • fehlt" if prompt else "  • kein Prompt")
-            if has and qc:
-                mark = "  ✓" if qc["fits"] else "  ✗ prüfen"
             item = QListWidgetItem(self._thumb(self.project.image_path(s.key)),
                                    f"{KIND_LABEL[s.kind]}{mark}\n{s.title}")
-            tip = s.title
-            if qc and not qc["fits"]:
-                tip += "\n" + "\n".join("• " + x for x in qc["problems"])
-            item.setToolTip(tip)
             if not has:
                 item.setForeground(QColor("#e0a35a" if prompt else "#e06060"))
-            elif qc and not qc["fits"]:
-                item.setForeground(QColor("#e06060"))
             self.slot_list.addItem(item)
+            self._update_item_status(row=self.slot_list.count() - 1)
         self.slot_list.blockSignals(False)
         if self.slots:
             self.slot_list.setCurrentRow(min(max(row, 0), len(self.slots) - 1))
             self._show_slot(self.slot_list.currentRow())
         n_img = sum(self.project.has_image(s.key) for s in self.slots)
         self.statusBar().showMessage(f"{len(self.slots)} Bildplätze · {n_img} Bilder vorhanden")
+        self._update_rejected_count()
+
+    def _update_item_status(self, row):
+        """Badge and tooltip of one list item from the manifest."""
+        s, item = self.slots[row], self.slot_list.item(row)
+        if not item:
+            return
+        has = self.project.has_image(s.key)
+        status = self.project.status(s.key)
+        item.setData(STATUS_ROLE, status if has else None)
+        tip = s.title
+        if has:
+            tip += "\nStatus: " + STATUS_TEXT[status]
+            qc = self.project.entry(s.key).get("qc")
+            if qc and not qc["fits"]:
+                tip += "\nKI: " + "\n".join("• " + x for x in qc["problems"])
+        item.setToolTip(tip)
+
+    def _update_rejected_count(self):
+        if not self.project:
+            return
+        st = [self.project.status(s.key) for s in self.slots]
+        n_x, n_flag = st.count(REJECTED), st.count(AI_FLAG)
+        self.lb_rejected.setText(f"Abgelehnt: {n_x + n_flag}  (✗ {n_x} · KI-Flagge {n_flag})  ·  "
+                                 f"freigegeben: ✓ {st.count(APPROVED)} · KI ✓ {st.count(AI_OK)}")
 
     def _current_slot(self):
         r = self.slot_list.currentRow()
@@ -1131,15 +1304,31 @@ class MainWindow(QMainWindow):
         self.slot_negative.setPlainText(e.get("negative", ""))
         self.slot_negative.setPlaceholderText("Negativ-Prompt nur für dieses Bild – leer = Standard aus „Stil“: "
                                               + self.project.config.get("negative", "")[:120])
-        qc = e.get("qc")
-        if not qc:
-            self.qc_label.setText("<span style='color:#6c7480'>Bildkontrolle: noch nicht geprüft</span>")
-        elif qc["fits"]:
-            self.qc_label.setText("<span style='color:#4fd18b'>Bildkontrolle: passt ✓</span>")
-        else:
-            self.qc_label.setText("<span style='color:#e06060'>Bildkontrolle: passt nicht – "
-                                  + "; ".join(qc["problems"]) + "</span>")
+        self._show_status(s.key)
         self._set_preview(self.project.image_path(s.key))
+
+    def _show_status(self, key):
+        """Review status of the shown slot: the badge plus the user's and the AI's verdict."""
+        if not self.project.has_image(key):
+            self.status_icon.clear()
+            self.qc_label.setText("<span style='color:#6c7480'>Noch kein Bild</span>")
+            return
+        status = self.project.status(key)
+        self.status_icon.setPixmap(badge_pixmap(status))
+        qc = self.project.entry(key).get("qc")
+        if not qc:
+            ai = "<span style='color:#6c7480'>KI-Prüfung: noch nicht geprüft</span>"
+        elif qc["fits"]:
+            ai = f"<span style='color:{STATUS_COLOR[AI_OK]}'>KI-Prüfung: passt</span>"
+        else:
+            ai = (f"<span style='color:{STATUS_COLOR[AI_FLAG]}'>KI-Prüfung: passt nicht – "
+                  + "; ".join(qc["problems"]) + "</span>")
+        review = self.project.review(key)
+        if review:
+            mine = f"<span style='color:{STATUS_COLOR[review]}'><b>Status: {STATUS_TEXT[review]}</b></span>"
+            self.qc_label.setText(mine + " · " + ai)
+        else:
+            self.qc_label.setText(ai)
 
     def _store_slot_edits(self):
         key = getattr(self, "_shown_key", None)
@@ -1165,9 +1354,54 @@ class MainWindow(QMainWindow):
                 item.setIcon(self._thumb(self.project.image_path(key)))
                 item.setText(f"{KIND_LABEL[s.kind]}\n{s.title}")
                 item.setForeground(QColor("#cfd5de"))
+                self._update_item_status(row)
             if row == self.slot_list.currentRow() and not self.preview_path:
                 self._set_preview(self.project.image_path(key))
+                self._show_status(key)
             break
+        self._update_rejected_count()
+
+    # ---------- review ----------
+    def _review_rows(self):
+        rows = sorted({i.row() for i in self.slot_list.selectedIndexes()})
+        if not rows and self._current_slot():
+            rows = [self.slot_list.currentRow()]
+        return rows
+
+    def _set_review(self, verdict, rows=None):
+        """Set the user's verdict (APPROVED, REJECTED or "" = remove) for the given or the selected rows."""
+        if not self.project:
+            return
+        if self.job and self.job.isRunning():
+            self.statusBar().showMessage("Bewerten geht erst, wenn der laufende Auftrag fertig ist.", 5000)
+            return
+        rows = [r for r in (self._review_rows() if rows is None else rows)
+                if self.project.has_image(self.slots[r].key)]
+        if not rows:
+            return
+        for r in rows:
+            self.project.set_review(self.slots[r].key, verdict)
+            self._update_item_status(r)
+        self.project.save_manifest()
+        cur = self._current_slot()
+        if cur:
+            self._show_status(cur.key)
+        self._update_rejected_count()
+
+    def _badge_clicked(self, row):
+        """Click on the badge: unreviewed / AI → freigegeben → abgelehnt → zurückgesetzt."""
+        key = self.slots[row].key
+        nxt = {"": APPROVED, APPROVED: REJECTED, REJECTED: ""}[self.project.review(key)]
+        self._set_review(nxt, rows=[row])
+
+    def _list_menu(self, pos):
+        if not self.project or not self.slot_list.itemAt(pos):
+            return
+        menu = QMenu(self)
+        for text, verdict in [("✓ Freigeben", APPROVED), ("✗ Ablehnen", REJECTED),
+                              ("Bewertung zurücksetzen", "")]:
+            menu.addAction(text, lambda v=verdict: self._set_review(v))
+        menu.exec(self.slot_list.viewport().mapToGlobal(pos))
 
     def _set_preview(self, path):
         pm = QPixmap(str(path)) if path and Path(path).exists() else QPixmap()
@@ -1481,6 +1715,7 @@ class MainWindow(QMainWindow):
             return
         self._collect()
         shutil.copy(self.preview_path, self.project.image_path(s.key))
+        self.project.reset_review(s.key)
         self.project.save()
         self._log(f"Übernommen: {s.title}")
         self._refresh_slots()
@@ -1514,6 +1749,26 @@ class MainWindow(QMainWindow):
         self._refresh_slots()
         if clicked is b_regen and self._ready():
             self.run_images(False)
+
+    def run_redo(self, new_prompts):
+        """Make every rejected image (red X, AI flag) again: new seed, optionally a new prompt first."""
+        if not self.project:
+            return
+        slots = [s for s in self.slots if self.project.status(s.key) in NEEDS_REDO]
+        title = "Neue Prompts + neue Bilder" if new_prompts else "Neue Bilder, neue Seeds"
+        if not slots:
+            QMessageBox.information(self, title, "Keine abgelehnten Bilder (rotes ✗ oder KI-Flagge).")
+            return
+        names = "\n".join("• " + s.title for s in slots[:8]) + (f"\n… und {len(slots) - 8} weitere" if len(slots) > 8 else "")
+        what = ("neue Prompts schreiben lassen und mit neuem Seed neu generieren" if new_prompts
+                else "mit gleichem Prompt und neuem Seed neu generieren")
+        qc = " Danach prüft die KI jedes neue Bild." if self.chk_qc.isChecked() else ""
+        if QMessageBox.question(self, title, f"{len(slots)} abgelehnte(s) Bild(er) {what}?{qc}\n\n{names}"
+                                ) != QMessageBox.Yes:
+            return
+        if self._ready():
+            self._start(lambda ctx: pipeline.redo_rejected(self.project, ctx, new_prompts=new_prompts),
+                        on_done=lambda _: self._after_change(), label=title + " …")
 
     def run_regen_one(self):
         s = self._current_slot()

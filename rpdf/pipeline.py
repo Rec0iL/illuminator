@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import agyimage, comfy, gemini, layout, planner, styles
-from .project import size_for
+from .project import NEEDS_REDO, size_for
 
 
 def engine(project):
@@ -290,8 +290,55 @@ def images(project, ctx, keys=None, regenerate=False, new_seed=False):
         _generate(project, client, cfg, s, ctx)
         if qc.get("enabled"):
             _check_and_fix(project, client, cfg, s, ctx, fix=qc.get("auto_fix", True),
-                           rounds=int(qc.get("rounds", 1)), radical=bool(qc.get("radical")))
+                           rounds=int(qc.get("rounds", 1)), radical=bool(qc.get("radical")),
+                           strictness=qc_strictness(project))
     ctx.progress(len(todo), len(todo))
+
+
+def redo_rejected(project, ctx, new_prompts=False):
+    """Regenerate every rejected image (red X from the user or AI flag) with a new seed.
+    new_prompts=True: let the LLM write a new prompt for each of them first. Approved images
+    (green or blue check) are not touched."""
+    slots = project.sync_manifest(project.slots())
+    todo = [s for s in slots if project.status(s.key) in NEEDS_REDO]
+    if not todo:
+        ctx.log("Keine abgelehnten Bilder.")
+        return
+    if new_prompts:
+        model = project.config["agy"].get("model") or None
+        for i, s in enumerate(todo):
+            ctx.check()
+            ctx.progress(i, len(todo))
+            ctx.log(f"[{i + 1}/{len(todo)}] neuer Prompt für {s.title}")
+            e = project.entry(s.key)
+            try:
+                prompt = planner.plan_single(s, _world(project), model, _redo_hint(e),
+                                             project.config.get("style", ""), _kind(project))
+            except planner.AgyError as err:
+                ctx.log(f"    {project.config.get('llm', 'agy')}-Fehler, alter Prompt bleibt: {err}")
+                continue
+            e.update(prompt=prompt, include_style=True)
+            project.save_manifest()
+    ctx.log(f"Generiere {len(todo)} abgelehnte(s) Bild(er) mit neuem Seed …")
+    images(project, ctx, keys={s.key for s in todo}, regenerate=True, new_seed=True)
+
+
+def _redo_hint(entry):
+    """Wish for the prompt writer: a clearly different description, avoiding what the AI check found."""
+    hint = ("The previous image for this slot was rejected. Its description was: "
+            f"\"{entry.get('prompt', '')}\". Write a different description.")
+    qc = entry.get("qc")
+    if qc and not qc.get("fits") and qc.get("problems"):
+        hint += " Avoid these problems found in the image: " + "; ".join(qc["problems"])
+    return hint
+
+
+def qc_strictness(project):
+    try:
+        level = int(project.config.get("qc", {}).get("strictness", planner.STRICTNESS_DEFAULT))
+    except (TypeError, ValueError):
+        return planner.STRICTNESS_DEFAULT
+    return level if level in planner.STRICTNESS else planner.STRICTNESS_DEFAULT
 
 
 def _remember_interaction(entry, client):
@@ -322,7 +369,7 @@ def edit_image(project, key, instruction, ctx):
         req, cancelled=ctx.cancelled, previous_id=prev, image_path=None if prev else project.image_path(key)))
     comfy.save_image(img, project.image_path(key), slot.kind)
     _remember_interaction(e, client)
-    e.pop("qc", None)
+    project.reset_review(key)
     project.save_manifest()
     ctx.log(f"    gespeichert: {project.image_path(key).name}")
     ctx.image_saved(key)
@@ -336,9 +383,8 @@ def remove_images(project, keys):
     for key in keys:
         if not project.trash_image(key):
             continue
-        e = project.entry(key)
-        e.pop("qc", None)
-        e["seed"] = random.randint(1, 2**31 - 1)
+        project.reset_review(key)
+        project.entry(key)["seed"] = random.randint(1, 2**31 - 1)
         removed.append(key)
     project.save_manifest()
     return removed
@@ -351,7 +397,7 @@ def _generate(project, client, cfg, slot, ctx):
     img = with_quota_wait(project, ctx, lambda: client.generate(wf, cancelled=ctx.cancelled))
     comfy.save_image(img, project.image_path(slot.key), slot.kind)
     _remember_interaction(e, client)
-    e.pop("qc", None)
+    project.reset_review(slot.key)
     project.save_manifest()
     ctx.log(f"    gespeichert: {project.image_path(slot.key).name}")
     ctx.image_saved(slot.key)
@@ -364,17 +410,24 @@ RADICAL_TRIES = 3       # ... with up to 3 images each (3x3)
 GEMINI_EDITS = 2    # agy/gemini: 1 generation + at most 2 edits of that image, then it stays as it is
 
 
-def _check_and_edit(project, slot, ctx, fix, model):
+def _judge(project, slot, model, strictness):
+    """One AI check of the slot's image; the result goes into the manifest ("qc"), never into the
+    user's verdict ("review")."""
+    e = project.entry(slot.key)
+    result = planner.check_image(project.image_path(slot.key), project.build_dir / "qc" / slot.key,
+                                 slot, e.get("prompt", ""), _world(project), model,
+                                 project.config.get("style", ""), _kind(project), strictness)
+    e["qc"] = {"fits": result["fits"], "problems": result["problems"]}
+    project.save_manifest()
+    return result
+
+
+def _check_and_edit(project, slot, ctx, fix, model, strictness):
     """Gemini variant of the image check: no new concepts, the same image is edited via its
     interaction chain (max GEMINI_EDITS edits). The result of the last edit is not checked again."""
     for edit in range(GEMINI_EDITS + 1):
         ctx.check()
-        e = project.entry(slot.key)
-        result = planner.check_image(project.image_path(slot.key), project.build_dir / "qc" / slot.key,
-                                     slot, e.get("prompt", ""), _world(project), model,
-                                     project.config.get("style", ""), _kind(project))
-        e["qc"] = {"fits": result["fits"], "problems": result["problems"]}
-        project.save_manifest()
+        result = _judge(project, slot, model, strictness)
         if result["fits"]:
             ctx.log("    Bildkontrolle: passt")
             return True
@@ -390,7 +443,7 @@ def _check_and_edit(project, slot, ctx, fix, model):
     return False
 
 
-def _check_and_fix(project, client, cfg, slot, ctx, fix, rounds, radical=False):
+def _check_and_fix(project, client, cfg, slot, ctx, fix, rounds, radical=False, strictness=planner.STRICTNESS_DEFAULT):
     """agy image check; on a miss rewrite the prompt and regenerate.
 
     Normal: the first image plus `rounds` retries with a refined (similar) prompt.
@@ -399,18 +452,14 @@ def _check_and_fix(project, client, cfg, slot, ctx, fix, rounds, radical=False):
     """
     model = project.config["agy"].get("model") or None
     if project.config.get("engine") in ("agy", "gemini"):
-        return _check_and_edit(project, slot, ctx, fix, model)
+        return _check_and_edit(project, slot, ctx, fix, model, strictness)
     concepts, tries = (RADICAL_CONCEPTS, RADICAL_TRIES) if radical else (1, rounds + 1)
     failed = []     # [(prompt, problems)] of concepts that did not work
     for concept in range(concepts):
         for attempt in range(tries):
             ctx.check()
             e = project.entry(slot.key)
-            result = planner.check_image(project.image_path(slot.key), project.build_dir / "qc" / slot.key,
-                                         slot, e.get("prompt", ""), _world(project), model,
-                                         project.config.get("style", ""), _kind(project))
-            e["qc"] = {"fits": result["fits"], "problems": result["problems"]}
-            project.save_manifest()
+            result = _judge(project, slot, model, strictness)
             where = f" (Konzept {concept + 1}/{concepts}, Bild {attempt + 1}/{tries})" if radical else ""
             if result["fits"]:
                 ctx.log("    Bildkontrolle: passt" + where)
@@ -438,20 +487,31 @@ def _check_and_fix(project, client, cfg, slot, ctx, fix, rounds, radical=False):
     return False
 
 
-def check(project, ctx, keys=None, fix=None):
-    """Run the agy image check over existing images (fix=None: use the project setting)."""
+def check(project, ctx, keys=None, fix=None, strictness=None):
+    """Run the agy image check over existing images (fix=None / strictness=None: use the project setting).
+
+    Images the user has rated (green check or red X) are skipped, their verdict wins. Only when they
+    are asked for explicitly via `keys` they are checked too, but never changed."""
     qc = project.config.get("qc", {})
     fix = qc.get("auto_fix", True) if fix is None else fix
+    strictness = qc_strictness(project) if strictness is None else strictness
     slots = [s for s in project.sync_manifest(project.all_slots())
              if project.has_image(s.key) and s.kind != "background" and (keys is None or s.key in keys)]
+    if keys is None:
+        rated = [s for s in slots if project.review(s.key)]
+        if rated:
+            ctx.log(f"{len(rated)} von dir bewertete(s) Bild(er) übersprungen – deine Bewertung gilt.")
+        slots = [s for s in slots if not project.review(s.key)]
     E, client, cfg = _ready(project, ctx) if fix else engine(project)
+    ctx.log(f"Strenge der Bildkontrolle: {planner.STRICTNESS[strictness]}")
     misses = 0
     for i, s in enumerate(slots):
         ctx.check()
         ctx.progress(i, len(slots))
         ctx.log(f"[{i + 1}/{len(slots)}] prüfe {s.title}")
-        if not _check_and_fix(project, client, cfg, s, ctx, fix=fix, rounds=int(qc.get("rounds", 1)),
-                              radical=bool(qc.get("radical"))):
+        if not _check_and_fix(project, client, cfg, s, ctx, fix=fix and not project.review(s.key),
+                              rounds=int(qc.get("rounds", 1)), radical=bool(qc.get("radical")),
+                              strictness=strictness):
             misses += 1
     ctx.progress(len(slots), len(slots))
     ctx.log(f"Bildkontrolle fertig: {len(slots) - misses} passen, {misses} auffällig.")

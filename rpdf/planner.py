@@ -446,8 +446,41 @@ IMAGE_FORMAT_NOTE = ("Do NOT judge or mention image size, aspect ratio or orient
                      "the tool sets the format on purpose.")
 
 
-def check_image(image_path, work_dir, slot, prompt_used, world, model=None, style="", kind="rulebook"):
-    """Let agy look at one generated image and judge whether it fits its section."""
+STRICTNESS = {1: "locker", 2: "mittel", 3: "streng"}     # image check: 3 = follow the prompt closely
+STRICTNESS_DEFAULT = 3
+
+
+def _judge_criteria(pr, strictness):
+    """What the image check asks for, from strict (3, the motif must match the prompt) to lenient (1)."""
+    if strictness == 1:
+        return f"""Judge it like {pr['judge_role']}, but be lenient: the intended motif is only a guideline,
+do not judge how closely the image follows it.
+Reject the image (fits=false) only if:
+- it is broken: strong artifacts, an unreadable or garbled image, garbled text or letters, deformed
+  subjects (extra limbs, fused hands, broken faces), or
+- it is clearly off-topic: it has nothing to do with the section or the {pr['book']}'s topic.
+Otherwise ask yourself: does it still fit the section and work as an illustration? If yes, fits=true.
+{IMAGE_FORMAT_NOTE}"""
+    if strictness == 2:
+        return f"""Judge it like {pr['judge_role']}, without insisting on the exact motif:
+- The image does not have to match the intended motif in every detail. Other subjects, a different
+  composition or missing details are fine as long as it still clearly fits the section and the {pr['book']}'s topic.
+- Garbled or readable text, letters, logos? Broken anatomy (extra limbs, fused hands, faces)?
+- {pr['judge_misfit']}
+{IMAGE_FORMAT_NOTE}
+fits=true if it clearly fits the section and is usable in print, even if it differs from the intended motif."""
+    return f"""Judge it like {pr['judge_role']}:
+- Does it show the intended motif and fit the section and the {pr['book']}'s topic?
+- Garbled or readable text, letters, logos? Broken anatomy (extra limbs, fused hands, faces)?
+- {pr['judge_misfit']}
+{IMAGE_FORMAT_NOTE}
+fits=true only if it is good enough to print."""
+
+
+def check_image(image_path, work_dir, slot, prompt_used, world, model=None, style="", kind="rulebook",
+                strictness=STRICTNESS_DEFAULT):
+    """Let agy look at one generated image and judge whether it fits its section.
+    strictness: 3 = streng (motif as in the prompt), 2 = mittel, 1 = locker (only broken or off-topic images fail)."""
     pr = profile(kind)
     prompt = f"""The image was generated to illustrate a {pr['noun']}.
 {pr['world_label']}: {world or 'unknown'}
@@ -458,12 +491,7 @@ Section text (excerpt):
 
 Intended motif: {prompt_used}
 
-Judge it like {pr['judge_role']}:
-- Does it show the intended motif and fit the section and the {pr['book']}'s topic?
-- Garbled or readable text, letters, logos? Broken anatomy (extra limbs, fused hands, faces)?
-- {pr['judge_misfit']}
-{IMAGE_FORMAT_NOTE}
-fits=true only if it is good enough to print.
+{_judge_criteria(pr, strictness)}
 problems: short German bullet points. better_prompt: an improved English motif prompt (25-60 words,
 no style words, no text in the image) that avoids the problems."""
     schema = {"type": "object", "properties": {

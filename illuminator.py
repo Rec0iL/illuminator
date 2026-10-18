@@ -6,7 +6,8 @@
   python3 illuminator.py plan PROJEKT [--force]      Bild-Prompts mit agy schreiben
   python3 illuminator.py images PROJEKT [--all]      Fehlende (oder alle) Bilder generieren
   python3 illuminator.py edit PROJEKT KEY "Anweisung"  Bild per Gemini bearbeiten (Interaction-Kette)
-  python3 illuminator.py check PROJEKT [--no-fix]    Bilder mit agy prüfen (und unpassende neu machen)
+  python3 illuminator.py check PROJEKT [--no-fix] [--strictness 1|2|3]
+                                                      Bilder mit agy prüfen (und unpassende neu machen)
   python3 illuminator.py restructure PROJEKT ORIGINAL.pdf
                                                       Überschriften-Ebenen nach dem Original-PDF richten
   python3 illuminator.py build PROJEKT [--lang xx]   PDFs setzen (alle Sprachen, oder nur xx)
@@ -43,6 +44,9 @@ def main():
     ap.add_argument("--keep-images", action="store_true", help="add-lang: Bilder des Dokuments übernehmen")
     ap.add_argument("--list", action="store_true", help="strip-images: Bild-Verweise nur auflisten")
     ap.add_argument("--only", help="strip-images: nur diese Nummern (aus --list), kommagetrennt")
+    ap.add_argument("--strictness", type=int, choices=[1, 2, 3],
+                    help="check: Strenge der Bildkontrolle, 3 = streng (Motiv wie im Prompt), 2 = mittel, "
+                         "1 = locker (nur kaputte oder themenfremde Bilder); Standard: Projekteinstellung")
     args = ap.parse_args()
     if args.lang:
         from rpdf.project import clean_lang
@@ -92,7 +96,7 @@ def run_command(args, ap, ctx):
             ap.error("edit PROJEKT KEY \"Anweisung\"")
         pipeline.edit_image(p, args.source, args.instruction, ctx)
     if args.command == "check":
-        pipeline.check(p, ctx, fix=False if args.no_fix else None)
+        pipeline.check(p, ctx, fix=False if args.no_fix else None, strictness=args.strictness)
     if args.command in ("build", "all"):
         results = pipeline.build(p, ctx, [args.lang] if args.lang else None)
         if len(results) > 1:

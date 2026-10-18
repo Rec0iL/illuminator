@@ -46,7 +46,7 @@ Select an image in the list. On the right you find the motif prompt, a separate 
 
 - **New prompt**: new motif, optionally with a wish ("more night, two fighters").
 - **Analyse**: the LLM looks at the current image, briefly says what fits and what does not, and improves motif and negative prompt (e.g. "fused fingers" if hands merged). A wish in the field above is taken into account.
-- **Check**: image check only (✓ / ✗).
+- **Check**: image check only (blue check or flag).
 - **Preview**: renders with the current settings without replacing the image.
 - **Apply**: replaces the image with the preview.
 - **Generate & save**: regenerate directly.
@@ -61,7 +61,13 @@ If the text changes, the gaps move: fillers without a gap are simply not used, n
 
 ### Image check (optional)
 
-**Engine → Check generated images automatically**: after each generated image the LLM looks at it and judges motif, text artifacts, anatomy and whether it fits the world. With **Fix unsuitable images**, a failed image is corrected: with ComfyUI the LLM writes a better prompt and the image is regenerated with a new seed; with agy and Gemini the same image is edited instead (see "Image engines"). "Check images" checks all existing images, "Check" on a single image only that one. The result is shown at the image (✓ / ✗ with the problems found).
+**Engine → Check generated images automatically**: after each generated image the LLM looks at it and judges motif, text artifacts, anatomy and whether it fits the world. With **Fix unsuitable images**, a failed image is corrected: with ComfyUI the LLM writes a better prompt and the image is regenerated with a new seed; with agy and Gemini the same image is edited instead (see "Image engines"). "Check images" checks all existing images, "Check" on a single image only that one.
+
+Every image in the list has a status symbol in its corner. The AI check sets a **blue check** (fits) or an **orange flag** (problems found; the problems are in the tooltip and next to the image). Clicking the symbol sets your own verdict: **green check** (approved), then **red X** (rejected), then back to the AI's result. The buttons "✓ Approve", "✗ Reject" and "Reset" next to the image (and the right-click menu) do the same for all selected images. Your verdict always wins: "Check images" skips images you rated and never changes them. Verdicts are stored in `images.json`; a new image starts unreviewed again.
+
+The two buttons at the bottom work on all rejected images (red X and AI flag); green and blue checks are skipped. **New images, new seeds** regenerates them with the same prompt; **New prompts + new images** lets the LLM write a new prompt for each first. With automatic checking on, every new image is checked again.
+
+**Strictness** (Engine → Image check, `"qc": {"strictness": 3}`): 3 = strict, the image must follow the prompt closely (the default); 2 = medium, the motif may differ as long as the image clearly fits the section; 1 = lenient, only broken images (artifacts, garbled text, deformed subjects) or clearly off-topic ones fail.
 
 The following applies to the ComfyUI engine: **Retries** sets how often an unsuitable image is regenerated with an improved, similar prompt (up to 3). The switch **After 3 failures rewrite the concept radically (up to 3×3 images)** extends this: up to 3 images per concept; if none fits, the LLM rewrites the prompt from scratch. It knows the failed concepts and their problems and has to choose a different main motif, place and perspective that still fit the section. At most 3 concepts with 3 images each, i.e. 9 images per slot; it stops as soon as one fits. The result of the last attempt stays as the image even if none fit.
 
@@ -177,7 +183,7 @@ python3 illuminator.py new     PROJECT SOURCE    # create project (imports docx/
 python3 illuminator.py plan    PROJECT [--force] # write prompts (--force: all again)
 python3 illuminator.py images  PROJECT [--all]   # missing images (--all: all again)
 python3 illuminator.py edit    PROJECT KEY "instruction"  # edit an image (agy/gemini)
-python3 illuminator.py check   PROJECT [--no-fix]  # check images (--no-fix: check only)
+python3 illuminator.py check   PROJECT [--no-fix] [--strictness 1|2|3]  # check images (--no-fix: check only)
 python3 illuminator.py restructure PROJECT ORIGINAL.pdf  # align heading levels with the original
 python3 illuminator.py build   PROJECT [--lang pl]  # typeset the PDFs (all languages, or only one)
 python3 illuminator.py add-lang PROJECT FILE --lang pl [--keep-images]  # add a translation (md, docx, pdf, txt)

@@ -39,6 +39,7 @@ DEFAULTS = {
         "auto_fix": True,          # rewrite the prompt and regenerate when an image does not fit
         "rounds": 1,
         "radical": False,          # after 3 failed tries rewrite the prompt radically: up to 3 concepts x 3 images
+        "strictness": 3,           # 3 = streng (motif as in the prompt), 2 = mittel, 1 = locker
     },
     "content_type": "rulebook",    # rulebook (PnP) | document (README, tutorial, docs ...): changes the agy prompts
     "style_preset": "",
@@ -134,6 +135,11 @@ FILLER_TITLE_RE = re.compile(r"^Füllbild(?: \[[^\]]*\])?: ")
 def strip_filler_title(title):
     return FILLER_TITLE_RE.sub("", title)
 
+
+# Review state of an image. The user's verdict ("review" in images.json) always wins over the AI check ("qc").
+APPROVED, REJECTED = "approved", "rejected"     # set by the user
+AI_OK, AI_FLAG = "ai_ok", "ai_flag"             # from the AI check
+NEEDS_REDO = (REJECTED, AI_FLAG)
 
 # image sizes per slot kind (width, height)
 SIZES = {
@@ -455,6 +461,34 @@ class Project:
 
     def entry(self, key):
         return self.manifest.setdefault(key, {"prompt": "", "seed": random.randint(1, 2**31 - 1)})
+
+    # ---------- review ----------
+    def review(self, key):
+        """The user's verdict: APPROVED, REJECTED or ""."""
+        v = self.manifest.get(key, {}).get("review")
+        return v if v in (APPROVED, REJECTED) else ""
+
+    def set_review(self, key, verdict):
+        e = self.entry(key)
+        if verdict in (APPROVED, REJECTED):
+            e["review"] = verdict
+        else:
+            e.pop("review", None)
+
+    def status(self, key):
+        """APPROVED / REJECTED (user), AI_OK / AI_FLAG (AI check) or "" (unreviewed or no image)."""
+        if not self.has_image(key):
+            return ""
+        if self.review(key):
+            return self.review(key)
+        qc = self.manifest.get(key, {}).get("qc")
+        return (AI_OK if qc["fits"] else AI_FLAG) if qc else ""
+
+    def reset_review(self, key):
+        """A new image replaced the old one: neither the user's nor the AI's verdict applies any more."""
+        e = self.entry(key)
+        e.pop("qc", None)
+        e.pop("review", None)
 
     def full_prompt(self, key):
         e = self.entry(key)

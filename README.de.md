@@ -46,7 +46,7 @@ In der Bildliste ein Bild wählen. Rechts stehen Motiv-Prompt, ein eigener Negat
 
 - **Prompt neu (agy)**: neues Motiv, optional mit Wunsch („eher Nacht, zwei Kämpfer“).
 - **Analysieren (agy)**: agy sieht sich das aktuelle Bild an, schreibt kurz, was passt und was nicht, und verbessert Motiv-Prompt und Negativ-Prompt gezielt (z.B. „fused fingers“, wenn Hände verschmolzen sind). Ein Wunsch im Feld darüber wird berücksichtigt („mehr Crew zeigen“).
-- **Prüfen**: nur die Bildkontrolle (✓ / ✗).
+- **Prüfen**: nur die Bildkontrolle (blauer Haken oder Flagge).
 - **Vorschau**: rendert mit den aktuellen Einstellungen, ohne das Bild zu ersetzen.
 - **Übernehmen**: ersetzt das Bild durch die Vorschau.
 - **Generieren & speichern**: direkt neu erzeugen.
@@ -61,7 +61,13 @@ Kurze Abschnitte hinterlassen am Seitenende oft eine Lücke, weil der nächste B
 
 ### Bildkontrolle mit agy (optional)
 
-**Engine → Generierte Bilder automatisch prüfen**: Nach jedem generierten Bild sieht sich agy das Bild an und beurteilt Motiv, Textartefakte, Anatomie und ob es zur Welt passt. Mit **Unpassende Bilder korrigieren** schreibt agy bei einem Fehlschlag einen besseren Prompt, und das Bild wird mit neuem Seed neu erzeugt (nur ComfyUI; bei agy und Gemini wird das Bild stattdessen bearbeitet, siehe „Engines für Bilder“). „Bilder prüfen (agy)“ prüft alle vorhandenen Bilder, „Prüfen“ beim einzelnen Bild nur dieses. Das Ergebnis steht am Bild (✓ / ✗ mit den gefundenen Problemen).
+**Engine → Generierte Bilder automatisch prüfen**: Nach jedem generierten Bild sieht sich agy das Bild an und beurteilt Motiv, Textartefakte, Anatomie und ob es zur Welt passt. Mit **Unpassende Bilder korrigieren** schreibt agy bei einem Fehlschlag einen besseren Prompt, und das Bild wird mit neuem Seed neu erzeugt (nur ComfyUI; bei agy und Gemini wird das Bild stattdessen bearbeitet, siehe „Engines für Bilder“). „Bilder prüfen (agy)“ prüft alle vorhandenen Bilder, „Prüfen“ beim einzelnen Bild nur dieses.
+
+Jedes Bild in der Liste hat in der Ecke ein Status-Symbol. Die Bildkontrolle setzt einen **blauen Haken** (passt) oder eine **orange Flagge** (Probleme gefunden; die Probleme stehen im Tooltip und neben dem Bild). Ein Klick auf das Symbol setzt deine eigene Bewertung: **grüner Haken** (freigegeben), dann **rotes ✗** (abgelehnt), dann wieder das Ergebnis der KI. Die Knöpfe „✓ Freigeben“, „✗ Ablehnen“ und „Zurücksetzen“ neben dem Bild (und das Rechtsklick-Menü) machen dasselbe für alle markierten Bilder. Deine Bewertung gilt immer: „Bilder prüfen“ überspringt von dir bewertete Bilder und ändert sie nie. Die Bewertungen stehen in `images.json`; ein neues Bild ist wieder unbewertet.
+
+Die beiden Knöpfe unten arbeiten mit allen abgelehnten Bildern (rotes ✗ und KI-Flagge); grün und blau abgehakte bleiben. **Neue Bilder, neue Seeds** erzeugt sie mit gleichem Prompt neu, **Neue Prompts + neue Bilder** lässt vorher für jedes einen neuen Prompt schreiben. Ist die automatische Prüfung an, wird jedes neue Bild wieder geprüft.
+
+**Strenge** (Engine → Bildkontrolle, `"qc": {"strictness": 3}`): 3 = streng, das Bild muss dem Prompt genau folgen (Standard); 2 = mittel, das Motiv darf abweichen, solange das Bild klar zum Abschnitt passt; 1 = locker, nur kaputte Bilder (Artefakte, verzerrte Schrift, verformte Figuren) oder klar themenfremde fallen durch.
 
 Die folgenden Absätze zu Neuversuchen und Konzepten gelten für die Engine ComfyUI. **Neuversuche** legt fest, wie oft ein unpassendes Bild mit einem verbesserten, ähnlichen Prompt neu erzeugt wird (bis zu 3). Der Schalter **Nach 3 Fehlversuchen Konzept radikal neu (bis zu 3×3 Bilder)** erweitert das: Pro Konzept entstehen bis zu 3 Bilder, die beiden letzten mit jeweils verfeinertem Prompt. Passt keins, schreibt agy den Prompt von Grund auf neu. Es kennt die bereits gescheiterten Konzepte samt ihren Problemen und muss ein anderes Hauptmotiv, einen anderen Ort und eine andere Perspektive wählen, die weiter zum Abschnitt passen. Höchstens 3 Konzepte mit je 3 Bildern, also 9 Bilder pro Platz; sobald eins passt, ist Schluss. Die Zahl der Neuversuche gilt in diesem Modus nicht. Das Log zeigt „Konzept 2/3, Bild 1/3“. Das Ergebnis des letzten Versuchs bleibt als Bild stehen, auch wenn keins gepasst hat.
 
@@ -153,7 +159,7 @@ Beim eigenen Workflow setzt das Tool Prompt, Negativ-Prompt, Seed und Bildgröß
 python3 illuminator.py new    PROJEKT QUELLE    # Projekt anlegen (importiert docx/pdf/txt)
 python3 illuminator.py plan   PROJEKT [--force] # Prompts schreiben (--force: alle neu)
 python3 illuminator.py images PROJEKT [--all]   # fehlende Bilder (--all: alle neu)
-python3 illuminator.py check  PROJEKT [--no-fix]  # Bilder mit agy prüfen (--no-fix: nur prüfen)
+python3 illuminator.py check  PROJEKT [--no-fix] [--strictness 1|2|3]  # Bilder mit agy prüfen (--no-fix: nur prüfen)
 python3 illuminator.py restructure PROJEKT ORIGINAL.pdf  # Überschriften-Ebenen nach dem Original richten
 python3 illuminator.py build  PROJEKT [--lang pl]  # PDFs setzen (alle Sprachen oder nur eine)
 python3 illuminator.py add-lang PROJEKT DATEI --lang pl [--keep-images]  # Übersetzung hinzufügen (md, docx, pdf, txt)
