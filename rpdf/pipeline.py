@@ -299,7 +299,7 @@ def redo_rejected(project, ctx, new_prompts=False):
     """Regenerate every rejected image (red X from the user or AI flag) with a new seed.
     new_prompts=True: let the LLM write a new prompt for each of them first. Approved images
     (green or blue check) are not touched."""
-    slots = project.sync_manifest(project.slots())
+    slots = project.sync_manifest(project.all_slots())
     todo = [s for s in slots if project.status(s.key) in NEEDS_REDO]
     if not todo:
         ctx.log("Keine abgelehnten Bilder.")
