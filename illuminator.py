@@ -9,8 +9,14 @@
   python3 illuminator.py check PROJEKT [--no-fix]    Bilder mit agy prüfen (und unpassende neu machen)
   python3 illuminator.py restructure PROJEKT ORIGINAL.pdf
                                                       Überschriften-Ebenen nach dem Original-PDF richten
-  python3 illuminator.py build PROJEKT               PDF setzen
+  python3 illuminator.py build PROJEKT [--lang xx]   PDFs setzen (alle Sprachen, oder nur xx)
   python3 illuminator.py all PROJEKT                 plan + images + build
+  python3 illuminator.py add-lang PROJEKT DATEI --lang xx [--keep-images]
+                                                      Übersetzung hinzufügen (md, docx, pdf, txt), ohne deren Bilder
+  python3 illuminator.py remove-lang PROJEKT --lang xx
+  python3 illuminator.py strip-images PROJEKT --lang xx [--list] [--only 0,3,4]
+                                                      Bild-Verweise aus einer Übersetzung entfernen (alle oder ausgewählte)
+  python3 illuminator.py summary PROJEKT [--force]   Kurzfassung des Buchs für die LLM-Funktionen (neu) schreiben
 """
 import argparse
 import sys
@@ -21,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["gui", "new", "plan", "images", "check", "edit", "build", "all", "detect", "restructure"])
+    ap.add_argument("command", choices=["gui", "new", "plan", "images", "check", "edit", "build", "all", "detect", "restructure",
+                                          "add-lang", "remove-lang", "strip-images", "summary"])
     ap.add_argument("project", nargs="?")
     ap.add_argument("source", nargs="?")
     ap.add_argument("instruction", nargs="?", help="edit: was am Bild geändert werden soll")
@@ -32,7 +39,14 @@ def main():
     ap.add_argument("--wait-quota", action="store_true",
                     help="bei erschöpftem agy-Bildkontingent bis zum Reset warten und automatisch weitermachen")
     ap.add_argument("--no-fix", action="store_true", help="check: nur prüfen, nichts neu generieren")
+    ap.add_argument("--lang", help="Sprachcode (add-lang, remove-lang, strip-images; build: nur diese Sprache)")
+    ap.add_argument("--keep-images", action="store_true", help="add-lang: Bilder des Dokuments übernehmen")
+    ap.add_argument("--list", action="store_true", help="strip-images: Bild-Verweise nur auflisten")
+    ap.add_argument("--only", help="strip-images: nur diese Nummern (aus --list), kommagetrennt")
     args = ap.parse_args()
+    if args.lang:
+        from rpdf.project import clean_lang
+        args.lang = clean_lang(args.lang)
 
     if args.command == "gui":
         from rpdf.gui import run
@@ -67,6 +81,8 @@ def run_command(args, ap, ctx):
         p.config["quota_wait"] = True
     if args.command == "restructure":
         return restructure(p, args.source, ctx)
+    if args.command in ("add-lang", "remove-lang", "strip-images", "summary"):
+        return language_command(args, ap, p, ctx)
     if args.command in ("plan", "all"):
         pipeline.plan(p, ctx, force=args.force)
     if args.command in ("images", "all"):
@@ -78,10 +94,47 @@ def run_command(args, ap, ctx):
     if args.command == "check":
         pipeline.check(p, ctx, fix=False if args.no_fix else None)
     if args.command in ("build", "all"):
-        pipeline.build(p, ctx)
+        results = pipeline.build(p, ctx, [args.lang] if args.lang else None)
+        if len(results) > 1:
+            for r in results:
+                print(f"{r.lang}: {r.path} ({r.pages} Seiten)" if r.path else f"{r.lang}: FEHLER {r.error}")
     if args.command == "detect":   # internal: gap measurement for filler images
         from rpdf import layout
-        layout.detect_fillers(p, log=ctx.log)
+        for lang in [args.lang] if args.lang else p.build_languages():
+            layout.detect_fillers(p, None, ctx.log, lang)
+
+
+def language_command(args, ap, p, ctx):
+    """add-lang | remove-lang | strip-images | summary"""
+    from rpdf import importer, pipeline
+    if args.command == "summary":
+        print(pipeline.ensure_summary(p, ctx, force=args.force))
+        return
+    lang = args.lang
+    if not lang:
+        ap.error("--lang fehlt")
+    if args.command == "add-lang":
+        if not args.source:
+            ap.error("DATEI fehlt")
+        importer.import_translation(p, lang, args.source, ctx, p.config["agy"].get("model"),
+                                    p.config.get("content_type") or "rulebook", keep_images=args.keep_images)
+        print(f"Sprache {lang} hinzugefügt: {p.translation(lang)['source']}")
+    elif args.command == "remove-lang":
+        if lang not in p.languages()[1:]:
+            ap.error(f"Keine Übersetzung „{lang}“ (vorhanden: {', '.join(p.languages()[1:]) or 'keine'})")
+        p.remove_translation(lang)
+        p.save()
+        print(f"Sprache {lang} entfernt (die Dateien bleiben im Projektordner).")
+    else:
+        src = p.source_for(lang)
+        images = importer.list_images(src.read_text(encoding="utf-8"))
+        if args.list:
+            for it in images:
+                print(f"{it['index']:>3}  Zeile {it['line']:<5} {it['src']}  [{it['heading']}]")
+            return
+        only = None if not args.only else {int(x) for x in args.only.split(",") if x.strip()}
+        n = importer.strip_translation_images(p, lang, only)
+        print(f"{n} Bild-Verweis(e) entfernt." if n else "Keine Bild-Verweise gefunden.")
 
 
 def restructure(p, original, ctx):

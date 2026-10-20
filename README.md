@@ -31,7 +31,7 @@ Images in the Markdown with a relative path (e.g. `docs/screenshots/x.png`) are 
 ## Workflow in the GUI
 
 1. **New project…**: pick a rulebook (`.md`, `.docx`, `.pdf`, `.txt`) and an empty project folder. Word files are converted locally from their heading styles; PDF and text are converted section by section by the LLM (wording is preserved). Heading levels are then aligned with the original: chapters are the first-level entries of the table of contents; parts before the first such chapter that are set in the largest font also become chapters. Below that, heading font sizes determine the levels, and a subtitle on the same line is merged into its heading. The table of contents itself is not kept in the text. For an already imported project: `illuminator.py restructure PROJECT ORIGINAL.pdf` (backup `*.vor-restructure.md`; images of slots that only switch between chapter and section are kept). **Check the generated Markdown** (toolbar: "Open source"), especially for PDFs.
-2. **Book**: the **Content** switch at the top (tabletop rulebook / other document, see "Content type"). Title, subtitle, kicker, tagline, running head, chapter label, colors, font size, justification. "Fill everything automatically" reads the beginning of the text and proposes all cover and running-head texts in the book's language (existing entries are replaced after confirmation).
+2. **Book**: the **Source** may be Markdown, Word, PDF or text (the last three are converted like at project creation). The **Content** switch at the top (tabletop rulebook / other document, see "Content type"). Title, subtitle, kicker, tagline, running head, chapter label, colors, font size, justification. "Fill everything automatically" reads the beginning of the text and proposes all cover and running-head texts in the book's language (existing entries are replaced after confirmation).
 3. **Style**: choose a preset (Anime Action, Film Noir, Dark Fantasy, Comic …) or write a free **style wish**, e.g. "should look like a 90s anime", and **refine**. The LLM turns it into a style suffix the selected image model understands and proposes matching accent colors. The suffix stays editable. **Compress** next to each field removes duplicates, contradictions, filler words and terms that have no effect on the chosen model. **Suggest** next to it lets the LLM propose the field (world/topic, style wish, style suffix, negative prompt) from the book, the other fields and the image model; existing text is replaced only after confirmation. The negative suggestion leaves out terms that contradict the chosen style (e.g. "pixelated", "lowres" for pixel art).
 4. **Engine**: prompt generator (agy or Claude) and its model, and the **image engine** (agy, Gemini API or ComfyUI). With ComfyUI, "Connect" loads the models from the running ComfyUI; under **Image model** all models are listed with their detected architecture and the settings are applied on selection (see "ComfyUI models"). agy and Gemini need hardly any settings.
 5. **① Plan prompts**: the LLM reads the text, describes world and genre, and writes a motif for every image slot. Without a style set, it also proposes style and colors.
@@ -77,6 +77,26 @@ Claude uses only its read tool, pre-approved for that purpose.
 Image size and portrait/landscape are not judged; the tool sets them (cover and background are portrait on purpose). The selected style (e.g. pixel art) is known to the LLM during image check, "Analyse" and prompt creation and is not treated as a defect.
 
 If your project is outside all `trustedWorkspaces`, the image check with agy reports "agy could not open the image". Add the project folder (or a parent) there. Do **not** allow everything.
+
+## Languages (translations)
+
+One project can produce the same book in several languages, for example English (the main language) plus German and Polish, all in one build and without regenerating images.
+
+- **Tab "Languages" → Add translation…** takes a Markdown, Word, PDF or text file and asks for the language code (guessed from the text). Word and PDF are converted like when creating a project; the Markdown lands in `translations/<code>/`. The CLI equivalent is `illuminator.py add-lang PROJECT FILE --lang pl`.
+- **Images are shared.** Cover, page background, chapter banners and section images belong to the main-language text. The chapters and sections of a translation get the images of the chapter/section at the same position, so the translation needs the same structure (same number of chapters and sections per chapter). The tab shows whether the structure matches and lists the differences; unmatched blocks simply get no image. A translated heading never needs a new image.
+- **Filler images are per language.** The translated text breaks differently, so the gaps differ. With "Fill empty space with filler images" every language measures its own gaps and gets its own `fill-<code>-…` slots (shown in the list under "Filler images for", next to the language switch above the list). "Prompts / Missing images" cover all enabled languages.
+- **Texts per language:** title, subtitle, kicker, tagline, running head and chapter label are set per translation (**Fill texts automatically** reads the translation and writes them in its language). Colors, style and layout are shared. The hyphenation language follows the code.
+- **One go:** "③ Build PDF" and "▶ All" build the main language and every ticked translation one after another (`en.pdf`, `en.pl.pdf`, `en.de.pdf` by default; the output path is editable per language). A failing language does not stop the others. **Build only this language** and `illuminator.py build PROJECT --lang pl` build a single one.
+- **Strip images from a translation:** a PDF import normally leaves the document's own images out (they would be the old illustrations). If a translation's Markdown still has image references, **Remove images from the Markdown…** (CLI: `strip-images PROJECT --lang pl [--list] [--only 0,3]`) removes all of them or only the ticked ones; the files stay, the original text is kept as `*.vor-bildentfernung.md`. When adding a translation, "keep the document's images" overrides the default.
+
+## Summary and palette: less text for the LLM
+
+The first LLM function that needs to know the book (planning, style/world suggestions, palette) writes a short summary of the book once (about 100 words from the table of contents and the first lines of each chapter) and stores it in `project.json` (`summary`, shown and editable under **Style → Summary of the book**; "Suggest" writes it again; picking a different source discards it). From then on the book-aware functions get this summary plus the outline instead of excerpts of the text:
+
+- **Plan prompts** (world, style, cover, background): outline + summary. Chapter and section prompts still need the real chapter text.
+- **Suggest** next to world/style/negative/wish: outline + summary + the other fields.
+- **Book → Suggest palette (agy)**: summary + current style suffix + style wish + current colors, nothing else. Returns background, text and two accent colors; contrast is repaired if needed (the theme is dark). Previous values are printed in the log.
+- Cover texts still read the real start of the text (they must quote it).
 
 ## Content type: tabletop rulebook or other document
 
@@ -159,7 +179,11 @@ python3 illuminator.py images  PROJECT [--all]   # missing images (--all: all ag
 python3 illuminator.py edit    PROJECT KEY "instruction"  # edit an image (agy/gemini)
 python3 illuminator.py check   PROJECT [--no-fix]  # check images (--no-fix: check only)
 python3 illuminator.py restructure PROJECT ORIGINAL.pdf  # align heading levels with the original
-python3 illuminator.py build   PROJECT           # typeset the PDF
+python3 illuminator.py build   PROJECT [--lang pl]  # typeset the PDFs (all languages, or only one)
+python3 illuminator.py add-lang PROJECT FILE --lang pl [--keep-images]  # add a translation (md, docx, pdf, txt)
+python3 illuminator.py remove-lang PROJECT --lang pl
+python3 illuminator.py strip-images PROJECT --lang pl [--list] [--only 0,3]  # remove image references from a translation
+python3 illuminator.py summary PROJECT [--force]  # (re)write the short summary of the book
 python3 illuminator.py all     PROJECT           # plan + images + build (add --wait-quota to wait out an exhausted agy quota)
 ```
 
@@ -169,8 +193,9 @@ python3 illuminator.py all     PROJECT           # plan + images + build (add --
 project/
 ├── project.json   settings (source, output, title, colors, style, engines)
 ├── images.json    per image slot: motif prompt, seed, style on/off, optional negative prompt, check result, interaction_id
-├── images/        the generated images as JPEG (name = slot key)
+├── images/        the generated images as JPEG (name = slot key; `fill-<lang>-…` = filler of a translation)
 ├── media/         images from imported Word/PDF documents
+├── translations/  <lang>/ with the Markdown of each translation
 └── .build/        intermediate files, previews, image check (do not version)
 ```
 

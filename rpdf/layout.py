@@ -12,6 +12,8 @@ from string import Template
 
 import markdown
 
+from .project import filler_title
+
 PKG = Path(__file__).parent
 NARROW_TABLE_MAX_COLS = 3
 NARROW_TABLE_MAX_ROWS = 8         # longer tables span both columns and may break across pages
@@ -172,11 +174,11 @@ def _esc(text):
     return htmllib.escape(text or "")
 
 
-def _filler(fillers, block_key, img):
+def _filler(fillers, block_key, img, fkey):
     """Image filling the empty space after a block: fillers = {block_key: height_mm}."""
     if not fillers or block_key not in fillers:
         return ""
-    src = img(f"fill-{block_key}")
+    src = img(fkey(block_key))
     if not src:
         return ""
     return (f'<figure class="filler" style="height:{fillers[block_key]:.1f}mm">'
@@ -232,9 +234,13 @@ def find_gaps(document, min_gap_mm):
     return gaps
 
 
-def build_html(project, doc, fillers=None):
-    cfg = project.config
-    base = project.source_path.parent if project.source_path else None
+def build_html(project, doc, fillers=None, lang=None):
+    """HTML of one language. Topic images are shared by all languages (the translation's blocks carry
+    the same keys); filler images are looked up per language."""
+    cfg = project.settings_for(lang)
+    source = project.source_for(lang)
+    base = source.parent if source else None
+    fkey = lambda block: project.filler_key(block, lang)
     image_dirs = [project.root / "bilder", project.root]
     md = lambda text: _md(text, base, image_dirs)
     theme, lay = cfg["theme"], cfg["layout"]
@@ -292,7 +298,7 @@ def build_html(project, doc, fillers=None):
         has_intro = bool(ch.intro_md.strip())
         if has_intro:
             out.append(f'<div class="intro" id="b-{ch.key}">{_columns(_dropcap(md(ch.intro_md)), ch.intro_md)}</div>')
-            out.append(_filler(fillers, ch.key, img))
+            out.append(_filler(fillers, ch.key, img, fkey))
         for i, s in enumerate(ch.sections):
             fig = img(s.key) if lay.get("section_images") else None
             body = md(s.body_md)
@@ -306,7 +312,7 @@ def build_html(project, doc, fillers=None):
                 fig_html = f'<figure class="sub-figure"><img src="{fig}" alt=""></figure>' if fig else ""
                 out.append(f'<section class="sub" id="b-{s.key}"><div class="sub-head"><h3>{_esc(s.title)}</h3>{fig_html}</div>'
                            f'{_columns(body, s.body_md)}</section>')
-            out.append(_filler(fillers, s.key, img))
+            out.append(_filler(fillers, s.key, img, fkey))
         out.append("</section>")
         parts.append("\n".join(out))
 
@@ -338,14 +344,20 @@ def build_html(project, doc, fillers=None):
 FILLER_SPACING_MM = 9   # breathing room above a filler and safety margin below
 
 
-def detect_fillers(project, doc=None, log=print):
-    """Lay out without fillers and register a filler slot for every large gap."""
+def _build_name(stem, tag):
+    return f"{stem}.{tag}.html" if tag else f"{stem}.html"
+
+
+def detect_fillers(project, doc=None, log=print, lang=None):
+    """Lay out one language without fillers and register a filler slot for every large gap.
+    Each language has its own gaps (the translated text flows differently), so its own fillers."""
     from weasyprint import HTML
 
-    doc = doc or project.document()
+    tag = project.lang_tag(lang)
+    doc = doc or project.document(tag)
     project.build_dir.mkdir(parents=True, exist_ok=True)
-    html_path = project.build_dir / "probe.html"
-    html_path.write_text(build_html(project, doc), encoding="utf-8")
+    html_path = project.build_dir / _build_name("probe", tag)
+    html_path.write_text(build_html(project, doc, lang=tag), encoding="utf-8")
     document = HTML(filename=str(html_path)).render()
     min_gap = project.config["layout"].get("filler_min_mm", 55)
     gaps = find_gaps(document, min_gap)
@@ -353,44 +365,47 @@ def detect_fillers(project, doc=None, log=print):
     titles.update({s.key: s.title for c in doc.chapters for s in c.sections})
     chapter_of = {c.key: c.key for c in doc.chapters}
     chapter_of.update({s.key: c.key for c in doc.chapters for s in c.sections})
+    mine = lambda e: e.get("kind") == "filler" and (e.get("lang") or "") == tag
     for e in project.manifest.values():
-        if e.get("kind") == "filler":
+        if mine(e):
             e["active"] = False
     for block, gap_mm, width_mm in gaps:
         if block not in titles:
             continue
-        e = project.entry(f"fill-{block}")
-        e.update(kind="filler", active=True, title=f"Füllbild: {titles[block]}", after=block,
+        e = project.entry(project.filler_key(block, tag))
+        e.update(kind="filler", lang=tag, active=True, title=filler_title(titles[block], tag), after=block,
                  chapter=chapter_of[block], h_mm=round(gap_mm - FILLER_SPACING_MM, 1),
                  w_mm=round(width_mm, 1))
     # forget fillers for gaps that no longer exist, unless an image was already made
-    for key in [k for k, e in project.manifest.items()
-                if e.get("kind") == "filler" and not e.get("active") and not project.has_image(k)]:
+    for key in [k for k, e in project.manifest.items() if mine(e) and not e.get("active") and not project.has_image(k)]:
         del project.manifest[key]
     project.save_manifest()
-    log(f"Leerraum-Analyse: {len(gaps)} Lücke(n) ab {min_gap} mm gefunden.")
+    log(f"Leerraum-Analyse{f' ({tag})' if tag else ''}: {len(gaps)} Lücke(n) ab {min_gap} mm gefunden.")
     return document
 
 
-def render(project, doc=None, log=print):
+def render(project, doc=None, log=print, lang=None):
+    """Typeset the PDF of one language (the main language by default)."""
     from weasyprint import HTML
 
-    doc = doc or project.document()
+    tag = project.lang_tag(lang)
+    doc = doc or project.document(tag)
     project.build_dir.mkdir(parents=True, exist_ok=True)
     fillers = None
     if project.config["layout"].get("fill_gaps"):
-        detect_fillers(project, doc, log)
+        detect_fillers(project, doc, log, tag)
         fillers = {e["after"]: e["h_mm"] for k, e in project.manifest.items()
-                   if e.get("kind") == "filler" and e.get("active") and project.has_image(k)}
+                   if e.get("kind") == "filler" and (e.get("lang") or "") == tag and e.get("active")
+                   and project.has_image(k)}
         log(f"Füllbilder eingesetzt: {len(fillers)}")
-    html_path = project.build_dir / "index.html"
-    html = build_html(project, doc, fillers)
+    html_path = project.build_dir / _build_name("index", tag)
+    html = build_html(project, doc, fillers, tag)
     html_path.write_text(html, encoding="utf-8")
     for uri in sorted(set(re.findall(r'<img [^>]*src="(file://[^"]+)"', html))):
         path = Path(urllib.parse.unquote(urllib.parse.urlparse(uri).path))
         if not path.exists():
             log(f"WARNUNG: Bild nicht gefunden: {path}")
-    out = project.output_path
+    out = project.output_for(tag)
     out.parent.mkdir(parents=True, exist_ok=True)
     log("Setze PDF mit WeasyPrint …")
     document = HTML(filename=str(html_path)).render()

@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from . import planner
+from . import mdparse, planner
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -19,18 +19,30 @@ R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 WEB_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 MIN_PDF_IMAGE_PX = 200   # smaller PDF images are usually icons or ornaments
 CHUNK_CHARS = 8000
-HEADING_STYLE_RE = re.compile(r"(?i)(heading|berschrift|titre|titolo|titulo|kop)\s*(\d)")
+HEADING_STYLE_RE = re.compile(r"(?i)(heading|berschrift|nag[łl]ówek|titre|titolo|titulo|kop)\s*(\d)")
+SOURCE_EXT = (".md", ".markdown", ".docx", ".pdf", ".txt")
+SOURCE_FILTER = "Dokumente (*.md *.markdown *.docx *.pdf *.txt)"
 
 
-def to_markdown(src, dest, ctx, model=None, kind="rulebook"):
+def to_markdown(src, dest, ctx, model=None, kind="rulebook", keep_images=True):
+    """Write `src` (md, docx, pdf, txt) as Markdown to `dest`. keep_images=False leaves out the images
+    of the document: they are not extracted (docx, pdf) or their references are removed (md)."""
     src, dest = Path(src), Path(dest)
     ext = src.suffix.lower()
+    media = dest.parent / "media" if keep_images else None
     if ext in (".md", ".markdown"):
-        shutil.copy(src, dest)
+        text = src.read_text(encoding="utf-8")
+        if keep_images:
+            _copy_local_images(text, src.parent, dest.parent, ctx)
+        else:
+            text, n = strip_images(text)
+            if n:
+                ctx.log(f"{n} Bild-Verweis(e) aus dem Markdown entfernt.")
+        dest.write_text(text, encoding="utf-8")
     elif ext == ".docx":
-        dest.write_text(docx_to_markdown(src, dest.parent / "media", ctx), encoding="utf-8")
+        dest.write_text(docx_to_markdown(src, media, ctx), encoding="utf-8")
     elif ext == ".pdf":
-        md = _llm_restructure(pdf_text(src, dest.parent / "media", ctx), ctx, model, kind)
+        md = _llm_restructure(pdf_text(src, media, ctx), ctx, model, kind)
         toc = toc_from_pdf(src)
         md, report = relevel_from_pdf(md, src, toc)
         if report and report[0].startswith("Keine Schriftinformationen"):
@@ -46,6 +58,144 @@ def to_markdown(src, dest, ctx, model=None, kind="rulebook"):
         raise ValueError(f"Format {ext} wird nicht unterstützt (md, docx, pdf, txt).")
     ctx.log(f"Markdown geschrieben: {dest}")
     return dest
+
+
+# ---------- images in Markdown ----------
+# [![alt](src)](link) | ![alt](src "title") | <img src="src">
+MD_IMAGE_RE = re.compile(
+    r"\[!\[(?P<alt2>[^\]]*)\]\((?P<src2>[^)\s]+)[^)]*\)\]\([^)]*\)"
+    r"|!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+    r"|<img\b[^>]*?\bsrc=[\"'](?P<src3>[^\"']+)[\"'][^>]*>", re.I)
+REMOVED = "\x00"
+
+
+def _each_image(md, fn):
+    """Call fn(index, match, offset) -> replacement for every image reference outside code blocks;
+    offset is the position of the reference in `md`."""
+    count = [0]
+
+    def sub(segment, base):
+        def repl(m):
+            i = count[0]
+            count[0] += 1
+            return fn(i, m, base + m.start())
+        return MD_IMAGE_RE.sub(repl, segment)
+
+    out, pos = [], 0
+    for m in mdparse.FENCE_RE.finditer(md):
+        out += [sub(md[pos:m.start()], pos), m.group(0)]
+        pos = m.end()
+    out.append(sub(md[pos:], pos))
+    return "".join(out)
+
+
+def list_images(md):
+    """Image references of a Markdown text in order: [{index, src, alt, line, heading}]."""
+    heads = [(m.start(), m.group(2).strip()) for m in re.finditer(r"(?m)^(#{1,6})\s+(.+)$", md)]
+    found = []
+
+    def note(i, m, at):
+        src = m.group("src2") or m.group("src") or m.group("src3")
+        alt = (m.group("alt2") if m.group("src2") else m.group("alt")) or ""
+        found.append({"index": i, "src": src, "alt": alt, "line": md.count("\n", 0, at) + 1,
+                      "heading": next((t for p, t in reversed(heads) if p <= at), "")})
+        return m.group(0)
+
+    _each_image(md, note)
+    return found
+
+
+def strip_images(md, indexes=None):
+    """Remove image references (`indexes` = positions from list_images, None = all).
+    Lines that held only an image disappear completely. Returns (markdown, removed count)."""
+    removed = [0]
+
+    def drop(i, m, at):
+        if indexes is not None and i not in indexes:
+            return m.group(0)
+        removed[0] += 1
+        return REMOVED
+
+    out = _each_image(md, drop)
+    if removed[0]:
+        out = re.sub(r"(?m)^[ \t]*(?:\x00[ \t]*)+$\n?", "", out)
+        out = re.sub(r"(\S)[ \t]*\x00[ \t]*(\S)", r"\1 \2", out).replace(REMOVED, "")
+        out = re.sub(r"\n{3,}", "\n\n", out)
+    return out, removed[0]
+
+
+def _copy_local_images(md, src_dir, dest_dir, ctx):
+    """Images referenced by a copied Markdown file are copied along, with the same relative path."""
+    copied = 0
+    for item in list_images(md):
+        ref = item["src"]
+        if re.match(r"^(https?|file|data):", ref):
+            continue
+        rel = Path(ref)
+        src = (src_dir / rel).resolve()
+        dst = (dest_dir / rel).resolve()
+        if rel.is_absolute() or ".." in rel.parts or not src.is_file() or dst.exists():
+            continue
+        if dest_dir.resolve() not in dst.parents:
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dst)
+        copied += 1
+    if copied:
+        ctx.log(f"{copied} Bilddatei(en) neben das Markdown kopiert.")
+
+
+def sniff_language(path):
+    """Language code of a document (md, txt, docx, pdf) judged from its first pages, or ''."""
+    from .project import detect_language
+    path = Path(path)
+    ext = path.suffix.lower()
+    try:
+        if ext in (".md", ".markdown", ".txt"):
+            text = path.read_text(encoding="utf-8", errors="replace")
+        elif ext == ".docx":
+            text = docx_to_markdown(path)
+        elif ext == ".pdf" and shutil.which("pdftotext"):
+            text = subprocess.run(["pdftotext", "-enc", "UTF-8", "-l", "4", str(path), "-"],
+                                  capture_output=True, text=True, timeout=60).stdout
+        else:
+            return ""
+    except Exception:
+        return ""
+    return detect_language(text)
+
+
+def import_translation(project, lang, src, ctx, model=None, kind="rulebook", keep_images=False):
+    """Add `src` (md, docx, pdf, txt) as the translation `lang` of a project. The Markdown lives in
+    translations/<lang>/. Images of the document are left out unless keep_images (a PDF that was itself
+    made from this project would otherwise bring all its illustrations along). Returns the config entry."""
+    src, lang = Path(src), project.check_new_language(lang)     # fail before any import work
+    if src.suffix.lower() not in SOURCE_EXT:
+        raise ValueError(f"Format {src.suffix} wird nicht unterstützt (md, docx, pdf, txt).")
+    folder = project.translation_dir(lang)
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / (src.stem + ".md")
+    to_markdown(src, dest, ctx, model, kind, keep_images)
+    t = project.add_translation(lang, dest)
+    project.save()
+    for issue in project.alignment_issues(lang):
+        ctx.log(f"Achtung ({lang}): {issue} – die Bilder werden nach Position zugeordnet.")
+    return t
+
+
+def strip_translation_images(project, lang, indexes=None):
+    """Take image references out of a translation's Markdown (indexes from list_images, None = all).
+    The first time, the text is kept as <name>.vor-bildentfernung.md. Returns the number removed."""
+    src = project.source_for(lang)
+    if not project.lang_tag(lang) or not src or not src.exists():
+        raise ValueError("Bilder lassen sich nur aus dem Markdown einer Übersetzung entfernen.")
+    md, n = strip_images(src.read_text(encoding="utf-8"), None if indexes is None else set(indexes))
+    if n:
+        backup = src.with_name(src.stem + ".vor-bildentfernung" + src.suffix)
+        if not backup.exists():
+            shutil.copy(src, backup)
+        src.write_text(md, encoding="utf-8")
+    return n
 
 
 # ---------- DOCX ----------
@@ -193,7 +343,8 @@ def _chunks(text):
 
 
 TOC_LINE = re.compile(r"^.{2,}?(\s*\.){4,}\s*\d+\s*$")
-TOC_TITLE = re.compile(r"^\s*(inhalt|inhaltsverzeichnis|contents|table of contents|sommaire|indice)\s*$", re.I)
+TOC_TITLE = re.compile(r"^\s*(inhalt|inhaltsverzeichnis|contents|table of contents|sommaire|indice|índice|"
+                       r"spis treści|obsah|inhoud|innehåll|sisällys)\s*$", re.I)
 
 
 def strip_toc(text):
@@ -211,7 +362,7 @@ TOC_LAYOUT_LINE = re.compile(r"^( *)(\S.*?)(?:\s*\.){4,}\s*\d+\s*$")
 
 def _norm(title):
     t = re.sub(r"[*_`#]", "", title).lower()
-    return re.sub(r"[^0-9a-zäöüß]+", "", t)
+    return re.sub(r"[\W_]+", "", t)
 
 
 def toc_from_pdf(path, max_pages=8):

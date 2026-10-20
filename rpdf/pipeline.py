@@ -3,8 +3,11 @@
 Each step takes a Context with log/progress callbacks and a cancel flag.
 """
 import random
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
-from . import agyimage, comfy, gemini, layout, planner
+from . import agyimage, comfy, gemini, layout, planner, styles
 from .project import size_for
 
 
@@ -83,7 +86,7 @@ class Context:
             raise Cancelled()
 
 
-def run_isolated(project, command, ctx):
+def run_isolated(project, command, ctx, *extra):
     """Run a WeasyPrint step (`build` or `detect`) as `illuminator.py <command>` in a child process,
     streaming its output to the log. Returns the last output line."""
     import subprocess
@@ -92,7 +95,7 @@ def run_isolated(project, command, ctx):
 
     project.save()
     script = Path(__file__).resolve().parent.parent / "illuminator.py"
-    proc = subprocess.Popen([sys.executable, "-u", str(script), command, str(project.root)],
+    proc = subprocess.Popen([sys.executable, "-u", str(script), command, str(project.root), *extra],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     last = ""
     for line in proc.stdout:
@@ -113,20 +116,60 @@ def run_isolated(project, command, ctx):
     return last
 
 
-def _detect(project, doc, ctx):
+def _detect(project, ctx):
+    """Measure the gaps of every language and register filler slots for them."""
     if not project.config["layout"].get("fill_gaps"):
         return
     if ctx.isolate:
         run_isolated(project, "detect", ctx)
-    else:
-        layout.detect_fillers(project, doc, ctx.log)
+        return
+    for lang in project.build_languages():
+        try:
+            layout.detect_fillers(project, None, ctx.log, lang)
+        except FileNotFoundError as e:
+            ctx.log(f"Sprache {lang}: {e}")
+
+
+def _outline(doc):
+    return "\n".join(f"- {c.full_title}" + "".join(f"\n  - {s.title}" for s in c.sections) for c in doc.chapters)
+
+
+def _excerpts(doc, limit=planner.SUMMARY_TEXT_LIMIT):
+    """The first lines of every chapter, for the one-time summary of the book."""
+    def clean(text, n):
+        text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
+        return re.sub(r"\s+", " ", re.sub(r"[#*_`|>]+", " ", text)).strip()[:n]
+
+    per = max(250, min(900, limit // (len(doc.chapters) + 1)))
+    parts = [clean(doc.intro_md, per)] if doc.intro_md.strip() else []
+    for ch in doc.chapters:
+        body = ch.intro_md if ch.intro_md.strip() else " ".join(s.body_md for s in ch.sections[:2])
+        parts.append(f"{ch.full_title}: {clean(body, per)}")
+    return "\n\n".join(parts)
+
+
+def ensure_summary(project, ctx=None, doc=None, force=False):
+    """The short summary of the book. Made by the first LLM function that needs to know the book and stored
+    in project.json; after that, functions get these ~100 words instead of excerpts of the text."""
+    cfg = project.config
+    if cfg.get("summary", "").strip() and not force:
+        return cfg["summary"].strip()
+    doc = doc or project.document()
+    if ctx:
+        ctx.log("agy: kurze Zusammenfassung des Buchs (einmalig) …")
+    cfg["summary"] = planner.summarize(cfg.get("title") or doc.title or "", _outline(doc), _excerpts(doc),
+                                       cfg["agy"].get("model") or None, _kind(project))
+    project.save()
+    if ctx:
+        ctx.log(f"Zusammenfassung: {cfg['summary']}")
+    return cfg["summary"]
 
 
 def plan(project, ctx, force=False, keys=None, suggest_style=None):
     """Fill missing image prompts via agy. force=True rewrites existing prompts too."""
     doc = project.document()
-    _detect(project, doc, ctx)
-    slots = project.sync_manifest(project.slots(doc))
+    _detect(project, ctx)
+    slots = project.sync_manifest(project.all_slots())
     model = project.config["agy"].get("model") or None
     wanted = [s for s in slots if (keys is None or s.key in keys)
               and (force or not project.entry(s.key).get("prompt"))]
@@ -142,10 +185,12 @@ def plan(project, ctx, force=False, keys=None, suggest_style=None):
     ctx.progress(done, total)
 
     if need_global:
+        summary = ensure_summary(project, ctx, doc)
         ctx.log("agy: Welt, Stil, Cover und Hintergrund …")
-        g = planner.plan_global(doc, cfg.get("title") or doc.title or "", model, _kind(project))
+        g = planner.plan_global(_outline(doc), summary, cfg.get("title") or doc.title or "", model, _kind(project))
         cfg["world"] = g["world"]
         if suggest_style or (suggest_style is None and not cfg.get("style")):
+            styles.readable_accents(g, cfg["theme"])
             cfg["style"] = g["style"]
             cfg["theme"]["accent"], cfg["theme"]["accent2"] = g["accent"], g["accent2"]
             ctx.log(f"Stil-Vorschlag übernommen: {g['style']}")
@@ -160,7 +205,7 @@ def plan(project, ctx, force=False, keys=None, suggest_style=None):
     for s in wanted:
         if s.chapter_key:
             by_chapter.setdefault(s.chapter_key, []).append(s)
-    chapters = {c.key: c for c in doc.chapters}
+    chapters = project.chapters_by_key()
 
     # Sequential on purpose: concurrent agy runs interfere with each other and
     # come back with empty results.
@@ -209,7 +254,7 @@ def _world(project):
 
 
 def replan_one(project, key, hint="", ctx=None):
-    slot = next(s for s in project.slots() if s.key == key)
+    slot = project.slot(key)
     prompt = planner.plan_single(slot, _world(project), project.config["agy"].get("model") or None, hint,
                                  project.config.get("style", ""), _kind(project))
     project.entry(key).update(prompt=prompt, include_style=True)
@@ -219,10 +264,9 @@ def replan_one(project, key, hint="", ctx=None):
 
 def images(project, ctx, keys=None, regenerate=False, new_seed=False):
     """Generate images. By default only slots without an image file."""
-    doc = project.document()
     if keys is None:
-        _detect(project, doc, ctx)
-    slots = project.sync_manifest(project.slots(doc))
+        _detect(project, ctx)
+    slots = project.sync_manifest(project.all_slots())
     todo = [s for s in slots if (keys is None or s.key in keys)
             and (regenerate or not project.has_image(s.key))]
     if not todo:
@@ -264,7 +308,7 @@ def edit_image(project, key, instruction, ctx):
     falls back to uploading the JPEG when no interaction id is stored)."""
     if project.config.get("engine") not in ("agy", "gemini"):
         raise comfy.ComfyError("Bild bearbeiten geht nur mit den Engines „agy“ und „gemini“.")
-    slot = next(s for s in project.slots() if s.key == key)
+    slot = project.slot(key)
     if not project.has_image(key):
         raise FileNotFoundError("Für diesen Platz gibt es noch kein Bild.")
     E, client, cfg = _ready(project, ctx)
@@ -288,15 +332,10 @@ def remove_images(project, keys):
     """Take images out of the book so that "Fehlende Bilder" makes new ones. The file is moved to
     .build/removed/ (not deleted) and the slot gets a new seed, otherwise the same prompt and seed
     would just produce the same image again. Returns the keys that had an image."""
-    import time
     removed = []
     for key in keys:
-        path = project.image_path(key)
-        if not path.exists():
+        if not project.trash_image(key):
             continue
-        trash = project.build_dir / "removed"
-        trash.mkdir(parents=True, exist_ok=True)
-        path.replace(trash / f"{key}-{time.strftime('%Y%m%d-%H%M%S')}{path.suffix}")
         e = project.entry(key)
         e.pop("qc", None)
         e["seed"] = random.randint(1, 2**31 - 1)
@@ -403,7 +442,7 @@ def check(project, ctx, keys=None, fix=None):
     """Run the agy image check over existing images (fix=None: use the project setting)."""
     qc = project.config.get("qc", {})
     fix = qc.get("auto_fix", True) if fix is None else fix
-    slots = [s for s in project.sync_manifest(project.slots())
+    slots = [s for s in project.sync_manifest(project.all_slots())
              if project.has_image(s.key) and s.kind != "background" and (keys is None or s.key in keys)]
     E, client, cfg = _ready(project, ctx) if fix else engine(project)
     misses = 0
@@ -422,8 +461,10 @@ def refine_style(project, wish):
     """Ask agy to turn a free-text style wish into a style suffix + accent colors."""
     from .styles import model_hint
     cfg = project.config
-    return planner.refine_style(wish, cfg.get("style", ""), cfg.get("world", ""),
-                                model_hint(cfg), cfg["agy"].get("model") or None, _kind(project))
+    summary = cfg.get("summary", "") if cfg.get("world") else ensure_summary(project)
+    r = planner.refine_style(wish, cfg.get("style", ""), cfg.get("world", ""),
+                             model_hint(cfg), cfg["agy"].get("model") or None, _kind(project), summary)
+    return styles.readable_accents(r, cfg["theme"])
 
 
 def suggest_field(project, field, current):
@@ -431,22 +472,36 @@ def suggest_field(project, field, current):
     current = what the other fields hold right now ({'world': ..., 'style': ..., ...})."""
     from .styles import model_hint
     doc = project.document()
-    outline = "\n".join(f"- {c.full_title}" + "".join(f"\n  - {s.title}" for s in c.sections)
-                        for c in doc.chapters)
-    sample = doc.intro_md + "\n\n" + "\n\n".join(c.intro_md for c in doc.chapters)
+    if field == "summary":      # "Vorschlagen" on the summary box: write it again
+        return {"text": ensure_summary(project, doc=doc, force=True), "note": ""}
+    summary = ensure_summary(project, doc=doc)
     own = "style wish" if field == "wish" else field
     others = {k: v for k, v in current.items() if k != own}
-    return planner.suggest_field(field, project.config.get("title") or doc.title or "", outline, sample, others,
-                                 model_hint(project.config),
+    return planner.suggest_field(field, project.config.get("title") or doc.title or "", _outline(doc), summary,
+                                 others, model_hint(project.config),
                                  project.config["agy"].get("model") or None, _kind(project))
+
+
+def suggest_palette(project):
+    """agy proposes the four layout colors (bg, ink, accent, accent2) from the summary of the book, the
+    current style suffix and style wish. Returns the repaired palette plus a note."""
+    cfg = project.config
+    summary = ensure_summary(project)
+    r = planner.suggest_palette(summary, cfg.get("title", ""), cfg.get("style", ""), cfg.get("style_wish", ""),
+                                {k: cfg["theme"][k] for k in ("bg", "ink", "accent", "accent2")},
+                                cfg["agy"].get("model") or None, _kind(project))
+    palette = styles.fit_palette(r, cfg["theme"])
+    palette["note"] = str(r.get("note", "")).strip()
+    return palette
 
 
 COVER_KEYS = ("title", "subtitle", "kicker", "tagline", "running_title", "chapter_label")
 
 
-def suggest_cover(project, current=None):
-    """agy proposes all cover and running-head texts from the book (returns a dict with COVER_KEYS)."""
-    doc = project.document()
+def suggest_cover(project, current=None, lang=None):
+    """agy proposes all cover and running-head texts from the book (returns a dict with COVER_KEYS).
+    For a translation it reads that translation and writes in its language."""
+    doc = project.document(lang)
     chapters = [c.full_title for c in doc.chapters]
     current = {k: v for k, v in (current or {}).items() if v}
     r = planner.suggest_cover(doc.title or "", doc.intro_md, chapters, current,
@@ -461,7 +516,7 @@ def suggest_cover(project, current=None):
 
 def preview(project, key, ctx, prompt=None, style=None, seed=None):
     """Render one slot with the current settings into .build/ without touching the project images."""
-    slot = next(s for s in project.slots() if s.key == key)
+    slot = project.slot(key)
     e = project.entry(key)
     subject = (prompt if prompt is not None else e.get("prompt", "")).strip()
     style = (style if style is not None else project.config.get("style", "")).strip()
@@ -476,20 +531,55 @@ def preview(project, key, ctx, prompt=None, style=None, seed=None):
     return path
 
 
-def build(project, ctx):
+@dataclass
+class BuildResult:
+    lang: str
+    path: Path | None
+    pages: int = 0
+    error: str = ""
+
+
+def build(project, ctx, langs=None):
+    """Typeset the PDFs of all languages (or of `langs`) one after another and return a BuildResult for
+    each. A language that fails (missing file ...) is logged and does not stop the others; the call raises
+    only when nothing could be built."""
+    langs = list(langs or project.build_languages())
+    results = []
+    for i, lang in enumerate(langs):
+        ctx.check()
+        ctx.progress(i, len(langs))
+        if len(langs) > 1:
+            ctx.log(f"PDF {i + 1}/{len(langs)}: {lang}")
+        try:
+            results.append(_build_one(project, ctx, lang))
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            ctx.log(f"FEHLER ({lang}): {e}")
+            results.append(BuildResult(lang, None, 0, str(e)))
+    ctx.progress(len(langs), len(langs))
+    if not any(r.path for r in results):
+        raise RuntimeError("; ".join(r.error for r in results))
+    return results
+
+
+def _build_one(project, ctx, lang):
+    tag = project.lang_tag(lang)
+    for issue in (project.alignment_issues(tag) if tag else []):
+        ctx.log(f"Achtung ({lang}): {issue} – Bilder werden nach Position zugeordnet.")
     if not ctx.isolate:
-        return layout.render(project, log=ctx.log)
-    run_isolated(project, "build", ctx)
+        path, pages = layout.render(project, log=ctx.log, lang=tag)
+        return BuildResult(lang, path, pages)
+    run_isolated(project, "build", ctx, "--lang", lang)
     import subprocess
-    pages = subprocess.run(["pdfinfo", str(project.output_path)], capture_output=True, text=True).stdout
-    n = next((int(l.split()[-1]) for l in pages.splitlines() if l.startswith("Pages:")), 0)
-    return project.output_path, n
+    out = project.output_for(tag)
+    info = subprocess.run(["pdfinfo", str(out)], capture_output=True, text=True).stdout
+    n = next((int(l.split()[-1]) for l in info.splitlines() if l.startswith("Pages:")), 0)
+    return BuildResult(lang, out, n)
 
 
 def analyse(project, key, wish="", ctx=None):
     """agy looks at the current image and returns an improved prompt and negative prompt."""
     from .styles import model_hint
-    slot = next(s for s in project.slots() if s.key == key)
+    slot = project.slot(key)
     if not project.has_image(key):
         raise FileNotFoundError("Für diesen Platz gibt es noch kein Bild.")
     e = project.entry(key)

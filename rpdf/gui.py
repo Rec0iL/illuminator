@@ -1,4 +1,5 @@
 """PySide6 front end for Illuminator."""
+import html
 import random
 import shutil
 import sys
@@ -6,16 +7,17 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPalette, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
+    QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter,
     QMenu, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import comfy, importer, models, pipeline, planner, styles
-from .project import DEFAULTS, Project, create
+from .project import DEFAULTS, LANG_NAMES, TEXT_KEYS, Project, clean_lang, create, lang_label
 
 TW, TH = 190, 84   # thumbnail size
 RECENT_MAX = 10
@@ -129,6 +131,107 @@ def section_label(text):
     return l
 
 
+class AddLanguageDialog(QDialog):
+    """Language code and image handling for a translation that is about to be imported."""
+
+    def __init__(self, parent, path, guess, project):
+        super().__init__(parent)
+        self.setWindowTitle("Übersetzung hinzufügen")
+        self.project = project
+        f = QFormLayout(self)
+        f.addRow(QLabel(f"<b>{html.escape(path.name)}</b>"))
+        self.cb = QComboBox()
+        self.cb.setEditable(True)
+        for code in LANG_NAMES:
+            self.cb.addItem(lang_label(code), code)
+        self.cb.setCurrentIndex(self.cb.findData(guess))     # -1 (empty) when the language is unknown
+        self.cb.lineEdit().setPlaceholderText("Sprachcode, z.B. pl")
+        f.addRow("Sprache", self.cb)
+        self.chk = QCheckBox("Bilder aus dem Dokument übernehmen")
+        self.chk.setToolTip("Normalerweise weglassen: die Übersetzung bekommt die Bilder des Projekts. Ein PDF, das "
+                            "selbst aus diesem Projekt stammt, bringt sonst alle Illustrationen als Bilder mit.")
+        f.addRow(self.chk)
+        hint = QLabel("Ohne Haken werden die Bilder des Dokuments nicht übernommen. Die Themenbilder des "
+                      "Projekts gelten für alle Sprachen; übernommene Bilder kämen zusätzlich in den Text.")
+        hint.setWordWrap(True)
+        hint.setObjectName("dim")
+        f.addRow(hint)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._ok)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
+        self.setMinimumWidth(420)
+
+    def code(self):
+        return clean_lang((self.cb.currentText().split() or [""])[0])
+
+    def keep_images(self):
+        return self.chk.isChecked()
+
+    def _ok(self):
+        code = self.code()
+        if not code:
+            QMessageBox.information(self, "Sprache", "Bitte einen Sprachcode angeben (z.B. en, de, pl).")
+        elif code in self.project.languages():
+            extra = ("\nIst die Hauptsprache falsch eingestellt? Das ändert sich unter „Buch → Sprache“."
+                     if code == self.project.primary_lang else "")
+            QMessageBox.information(self, "Sprache", f"Die Sprache „{code}“ gibt es schon in diesem Projekt.{extra}")
+        else:
+            self.accept()
+
+
+class StripImagesDialog(QDialog):
+    """Pick which image references to take out of a translation's Markdown (all or selected)."""
+
+    def __init__(self, parent, md_path, images):
+        super().__init__(parent)
+        self.setWindowTitle("Bilder aus der Übersetzung entfernen")
+        self.images = images
+        self.indexes = None            # None = all
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel(f"{len(images)} Bild-Verweis(e) in {md_path.name}. Haken setzen und „Ausgewählte "
+                           "entfernen“, oder alle auf einmal entfernen. Die Bilddateien selbst bleiben."))
+        self.list = QListWidget()
+        self.list.setIconSize(QSize(72, 44))
+        for it in images:
+            item = QListWidgetItem(f"Zeile {it['line']} · {it['src']}\n{it['heading'] or '(vor der ersten Überschrift)'}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            pm = QPixmap(str(md_path.parent / it["src"])) if not it["src"].startswith(("http", "data:")) else QPixmap()
+            if not pm.isNull():
+                item.setIcon(QIcon(pm.scaled(72, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+            self.list.addItem(item)
+        v.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        for text, state in (("Alle markieren", Qt.Checked), ("Keine markieren", Qt.Unchecked)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, st=state: [self.list.item(i).setCheckState(st)
+                                                         for i in range(self.list.count())])
+            row.addWidget(b)
+        row.addStretch(1)
+        v.addLayout(row)
+        bb = QHBoxLayout()
+        b_some = QPushButton("Ausgewählte entfernen")
+        b_all = QPushButton("Alle entfernen")
+        b_all.setObjectName("primary")
+        b_cancel = QPushButton("Abbrechen")
+        b_some.clicked.connect(self._some)
+        b_all.clicked.connect(self.accept)
+        b_cancel.clicked.connect(self.reject)
+        for b in (b_some, b_all, b_cancel):
+            bb.addWidget(b)
+        v.addLayout(bb)
+        self.resize(640, 460)
+
+    def _some(self):
+        self.indexes = {self.images[i]["index"] for i in range(self.list.count())
+                        if self.list.item(i).checkState() == Qt.Checked}
+        if not self.indexes:
+            QMessageBox.information(self, "Bilder entfernen", "Es ist kein Bild markiert.")
+            return
+        self.accept()
+
+
 # ---------------------------------------------------------------- main window
 class MainWindow(QMainWindow):
     def __init__(self, project_dir=None):
@@ -141,6 +244,9 @@ class MainWindow(QMainWindow):
         self.slots = []
         self.preview_path = None
         self._thumb_cache = {}
+        self._view_lang = None        # language whose filler images the list shows (None = main language)
+        self._lang_shown = None       # translation shown in the "Sprachen" tab
+        self._summary_start = ""
 
         self._build_toolbar()
         self._build_ui()
@@ -162,7 +268,7 @@ class MainWindow(QMainWindow):
                            ("Öffnen…", self.open_project),
                            ("Speichern", self.save_project), (None, None),
                            ("Quelle öffnen", lambda: self._open_file(self.project and self.project.source_path)),
-                           ("PDF öffnen", lambda: self._open_file(self.project and self.project.output_path)),
+                           ("PDF öffnen", self._open_pdf),
                            ("Projektordner", lambda: self._open_file(self.project and self.project.root))]:
             if text is None:
                 tb.addSeparator()
@@ -198,6 +304,7 @@ class MainWindow(QMainWindow):
         tabs.setMinimumWidth(470)
         tabs.addTab(self._scroll(self._book_tab()), "Buch")
         tabs.addTab(self._scroll(self._style_tab()), "Stil")
+        tabs.addTab(self._scroll(self._lang_tab()), "Sprachen")
         tabs.addTab(self._scroll(self._engine_tab()), "Engine")
         split.addWidget(tabs)
 
@@ -215,7 +322,22 @@ class MainWindow(QMainWindow):
         self.slot_list.setWordWrap(True)
         self.slot_list.setSpacing(4)
         self.slot_list.currentRowChanged.connect(self._on_row_changed)
-        img_split.addWidget(self.slot_list)
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        self.view_row = QWidget()
+        vr = QHBoxLayout(self.view_row)
+        vr.setContentsMargins(0, 0, 0, 0)
+        vr.addWidget(QLabel("Füllbilder für"))
+        self.cb_view_lang = QComboBox()
+        self.cb_view_lang.setToolTip("Themenbilder (Cover, Kapitel, Abschnitte) sind für alle Sprachen gleich; "
+                                     "Füllbilder hat jede Sprache für sich.")
+        self.cb_view_lang.activated.connect(lambda _: self._view_changed())
+        vr.addWidget(self.cb_view_lang, 1)
+        self.view_row.hide()
+        lv.addWidget(self.view_row)
+        lv.addWidget(self.slot_list, 1)
+        img_split.addWidget(left)
         img_split.addWidget(self._detail_panel())
         img_split.setSizes([470, 550])
         right.addWidget(img_split)
@@ -246,7 +368,7 @@ class MainWindow(QMainWindow):
         self.btn_images.clicked.connect(lambda: self.run_images(False))
         self.btn_images_all.clicked.connect(self._confirm_all_images)
         self.btn_check.clicked.connect(self.run_check)
-        self.btn_build.clicked.connect(self.run_build)
+        self.btn_build.clicked.connect(lambda: self.run_build())
         self.btn_all.clicked.connect(self.run_all)
         self.btn_cancel.clicked.connect(lambda: self.job and self.job.cancel())
         for w in (self.btn_plan, self.chk_overwrite, self.btn_images, self.btn_images_all,
@@ -259,7 +381,8 @@ class MainWindow(QMainWindow):
         self.action_buttons = [self.btn_plan, self.btn_images, self.btn_images_all, self.btn_build,
                                self.btn_all, self.btn_preview, self.btn_regen, self.btn_replan,
                                self.btn_refine, self.btn_accept, self.btn_check, self.btn_check_one,
-                               self.btn_analyse, self.btn_cover_auto, self.btn_remove] + self.compress_buttons
+                               self.btn_analyse, self.btn_cover_auto, self.btn_remove, self.btn_palette,
+                               ] + self.compress_buttons + self.lang_buttons
 
     def _scroll(self, widget):
         s = QScrollArea()
@@ -282,7 +405,9 @@ class MainWindow(QMainWindow):
                                 "Motive passend zum Thema (Readme, Tutorial, Dokumentation …).")
         self.cb_kind.currentIndexChanged.connect(self._kind_changed)
         f.addRow("Inhalt", self.cb_kind)
-        f.addRow("Quelle (.md)", path_row(self.ed_source, self._pick_source))
+        self.ed_source.setToolTip("Markdown direkt, Word/PDF/Text werden wie beim Anlegen eines Projekts in Markdown "
+                                  "umgewandelt (Ergebnis im Projektordner).")
+        f.addRow("Quelle (md, docx, pdf, txt)", path_row(self.ed_source, self._pick_source))
         f.addRow("PDF-Ausgabe", path_row(self.ed_output, self._pick_output))
         f.addRow(section_label("Cover & Kopfzeile"))
         self.ed_title, self.ed_subtitle, self.ed_kicker = QLineEdit(), QLineEdit(), QLineEdit()
@@ -298,7 +423,10 @@ class MainWindow(QMainWindow):
         f.addRow(self.btn_cover_auto)
         f.addRow(section_label("Struktur"))
         self.cb_lang = QComboBox()
-        self.cb_lang.addItems(["de", "en", "fr", "es", "it", "nl"])
+        self.cb_lang.setEditable(True)
+        self.cb_lang.addItems(list(LANG_NAMES))
+        self.cb_lang.setToolTip("Sprache des Quelltexts (Hauptsprache): Silbentrennung und Grundlage für die "
+                                "Übersetzungen im Tab „Sprachen“.")
         self.cb_level = QComboBox()
         self.cb_level.addItems(["Automatisch", "# Kapitel / ## Abschnitte", "## Kapitel / ### Abschnitte"])
         self.chk_section_images = QCheckBox("Bild für jeden Abschnitt")
@@ -308,7 +436,7 @@ class MainWindow(QMainWindow):
         self.sp_font.setRange(7.5, 13.0)
         self.sp_font.setSingleStep(0.2)
         self.sp_font.setSuffix(" pt")
-        f.addRow("Sprache (Silbentrennung)", self.cb_lang)
+        f.addRow("Sprache", self.cb_lang)
         f.addRow("Überschriften", self.cb_level)
         f.addRow("", self.chk_section_images)
         f.addRow("", self.chk_texture)
@@ -328,6 +456,15 @@ class MainWindow(QMainWindow):
         f.addRow("Text", self.col_ink)
         f.addRow("Akzent (Überschriften)", self.col_accent)
         f.addRow("Akzent 2 (Kapitel, Initialen)", self.col_accent2)
+        self.btn_palette = QPushButton("Palette vorschlagen (agy)")
+        self.btn_palette.setToolTip("agy bekommt die Kurzfassung des Buchs, den aktuellen Stil-Suffix und den "
+                                    "Stilwunsch – nicht den ganzen Text – und schlägt alle vier Farben vor.")
+        self.btn_palette.clicked.connect(self.run_palette)
+        f.addRow(self.btn_palette)
+        self.lb_palette = QLabel()
+        self.lb_palette.setWordWrap(True)
+        self.lb_palette.setObjectName("dim")
+        f.addRow(self.lb_palette)
         return w
 
     def _style_tab(self):
@@ -358,6 +495,11 @@ class MainWindow(QMainWindow):
         self.world_head = self._field_head("Welt (von agy erkannt, für alle Prompts)", "world", self.ed_world)
         f.addRow(self.world_head)
         f.addRow(self.ed_world)
+        self.ed_summary = text_box(90)
+        self.ed_summary.setPlaceholderText("Wird beim ersten agy-Aufruf, der das Buch kennen muss, einmal geschrieben.")
+        f.addRow(self._field_head("Kurzfassung des Buchs (agy bekommt diese statt des Texts)", "summary",
+                                  self.ed_summary))
+        f.addRow(self.ed_summary)
         hint = QLabel("Tipp: Stil ändern → Abschnitt wählen → „Vorschau“. Passt es, mit "
                       "„vorhandene überschreiben“ neu planen und „Alle Bilder neu“.")
         hint.setWordWrap(True)
@@ -391,6 +533,89 @@ class MainWindow(QMainWindow):
         h.addWidget(s)
         self.compress_buttons = getattr(self, "compress_buttons", []) + [b, s]
         return row
+
+    def _lang_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        info = QLabel("Dasselbe Buch in weiteren Sprachen. Cover, Kapitel- und Abschnittsbilder sowie der "
+                      "Hintergrund sind für alle Sprachen gleich: Kapitel und Abschnitte der Übersetzung bekommen "
+                      "die Bilder der Hauptsprache nach ihrer Reihenfolge. Füllbilder gibt es pro Sprache, weil der "
+                      "übersetzte Text anders umbricht. „PDF bauen“ und „▶ Alles“ setzen alle angehakten "
+                      "Sprachen in einem Rutsch.")
+        info.setWordWrap(True)
+        info.setObjectName("dim")
+        info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)    # wrapped text must not widen the tab
+        v.addWidget(info)
+        self.lang_list = QListWidget()
+        self.lang_list.setFixedHeight(120)
+        self.lang_list.currentRowChanged.connect(self._on_lang_row)
+        self.lang_list.itemChanged.connect(self._on_lang_checked)
+        v.addWidget(self.lang_list)
+        row = QHBoxLayout()
+        self.btn_lang_add = QPushButton("Übersetzung hinzufügen…")
+        self.btn_lang_add.setToolTip("Markdown, Word, PDF oder Text. PDF und Word werden wie beim Anlegen eines "
+                                     "Projekts in Markdown umgewandelt; ihre Bilder lässt der Import weg.")
+        self.btn_lang_add.clicked.connect(self.add_language)
+        self.btn_lang_remove = QPushButton("Entfernen")
+        self.btn_lang_remove.setToolTip("Nimmt die Sprache aus dem Projekt. Das Markdown bleibt im Ordner, die "
+                                        "Füllbilder dieser Sprache wandern nach .build/removed/.")
+        self.btn_lang_remove.clicked.connect(self.remove_language)
+        row.addWidget(self.btn_lang_add)
+        row.addWidget(self.btn_lang_remove)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self.lb_lang_main = QLabel("Hauptsprache: ihre Texte, Farben und der Stil stehen in den Tabs „Buch“ und "
+                                   "„Stil“. Den Sprachcode ändert man unter „Buch → Sprache“.")
+        self.lb_lang_main.setWordWrap(True)
+        self.lb_lang_main.setObjectName("dim")
+        self.lb_lang_main.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        v.addWidget(self.lb_lang_main)
+
+        self.lang_detail = QWidget()
+        f = QFormLayout(self.lang_detail)
+        f.setContentsMargins(0, 0, 0, 0)
+        self.ed_l_source, self.ed_l_output = QLineEdit(), QLineEdit()
+        f.addRow("Markdown", path_row(self.ed_l_source, self._pick_lang_source))
+        f.addRow("PDF-Ausgabe", path_row(self.ed_l_output, self._pick_lang_output))
+        self.l_fields = {key: QLineEdit() for key in TEXT_KEYS}
+        for key, label in [("title", "Titel"), ("subtitle", "Untertitel"), ("kicker", "Kicker (über dem Titel)"),
+                           ("tagline", "Tagline"), ("running_title", "Kopfzeile"), ("chapter_label", "Kapitel-Label")]:
+            f.addRow(label, self.l_fields[key])
+        self.cb_l_level = QComboBox()
+        self.cb_l_level.addItems(["Automatisch", "# Kapitel / ## Abschnitte", "## Kapitel / ### Abschnitte"])
+        f.addRow("Überschriften", self.cb_l_level)
+        self.btn_l_fill = QPushButton("Texte automatisch ausfüllen (agy)")
+        self.btn_l_fill.setToolTip("agy liest den Anfang der Übersetzung und schreibt Titel, Untertitel, Kicker, "
+                                   "Tagline, Kopfzeile und Kapitel-Label in deren Sprache.")
+        self.btn_l_fill.clicked.connect(self.run_lang_cover_auto)
+        self.btn_l_strip = QPushButton("Bilder aus dem Markdown entfernen…")
+        self.btn_l_strip.setToolTip("Nimmt Bild-Verweise aus dem Markdown dieser Übersetzung: alle oder nur "
+                                    "ausgewählte (z.B. Bilder, die ein PDF-Import mitgebracht hat).")
+        self.btn_l_strip.clicked.connect(self.strip_language_images)
+        self.btn_l_open = QPushButton("Markdown öffnen")
+        self.btn_l_open.clicked.connect(lambda: self._lang_shown and self._open_file(
+            self.project.source_for(self._lang_shown)))
+        self.btn_l_build = QPushButton("Nur diese Sprache bauen")
+        self.btn_l_build.clicked.connect(lambda: self._lang_shown and self.run_build([self._lang_shown]))
+        for b in (self.btn_l_fill, self.btn_l_strip):
+            f.addRow(b)
+        brow = QWidget()
+        h = QHBoxLayout(brow)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.btn_l_open)
+        h.addWidget(self.btn_l_build)
+        f.addRow(brow)
+        self.lb_l_status = QLabel()
+        self.lb_l_status.setWordWrap(True)
+        self.lb_l_status.setTextFormat(Qt.RichText)
+        self.lb_l_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        f.addRow(self.lb_l_status)
+        v.addWidget(self.lang_detail)
+        v.addStretch(1)
+        self.lang_buttons = [self.btn_lang_add, self.btn_lang_remove, self.btn_l_fill, self.btn_l_strip,
+                             self.btn_l_build]
+        return w
 
     def _engine_tab(self):
         w = QWidget()
@@ -622,9 +847,10 @@ class MainWindow(QMainWindow):
 
     # ---------- project ----------
     def load_project(self, path):
+        self._view_lang = self._lang_shown = None
         try:
             self.project = Project(path)
-            self.slots = self.project.sync_manifest(self.project.slots())
+            self.slots = self.project.sync_manifest(self._view_slots())
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "Projekt", f"Projekt konnte nicht geladen werden:\n{e}")
             self.project = Project(path)
@@ -670,6 +896,8 @@ class MainWindow(QMainWindow):
             ed.setText(c.get(key, ""))
         self.cb_lang.setCurrentText(c.get("language", "de"))
         self.cb_level.setCurrentIndex(int(c.get("chapter_level") or 0))
+        self.ed_summary.setPlainText(c.get("summary", ""))
+        self._summary_start = c.get("summary", "")
         lay = c["layout"]
         self.chk_section_images.setChecked(lay.get("section_images", True))
         self.chk_texture.setChecked(lay.get("page_texture", True))
@@ -719,6 +947,7 @@ class MainWindow(QMainWindow):
         self._engine_changed()
         self._select_model_in_picker()
         self._apply_accent(t["accent"])
+        self._fill_langs(select=self._lang_shown)
 
     def _collect(self):
         """Write the form back into project.config (and the selected slot into the manifest)."""
@@ -730,8 +959,14 @@ class MainWindow(QMainWindow):
                         (self.ed_tagline, "tagline"), (self.ed_running, "running_title"),
                         (self.ed_chlabel, "chapter_label")]:
             c[key] = ed.text().strip()
-        c["language"] = self.cb_lang.currentText()
+        lang = clean_lang(self.cb_lang.currentText()) or c.get("language", "de")
+        if lang != c.get("language") and any(t["lang"] == lang for t in c["translations"]):
+            self._log(f"Die Hauptsprache kann nicht „{lang}“ werden: das ist schon eine Übersetzung.")
+            lang = c["language"]
+            self.cb_lang.setCurrentText(lang)
+        c["language"] = lang
         c["chapter_level"] = self.cb_level.currentIndex()
+        c["summary"] = self.ed_summary.toPlainText().strip()
         c["layout"].update(section_images=self.chk_section_images.isChecked(),
                            page_texture=self.chk_texture.isChecked(),
                            justify=self.chk_justify.isChecked(), font_size_pt=round(self.sp_font.value(), 2),
@@ -747,6 +982,7 @@ class MainWindow(QMainWindow):
         c["style"] = self.ed_style.toPlainText().strip()
         c["negative"] = self.ed_negative.toPlainText().strip()
         c["world"] = self.ed_world.toPlainText().strip()
+        self._store_lang_edits()
         c["llm"] = self.cb_llm.currentData()
         c["claude" if c["llm"] == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
         planner.configure(c)
@@ -771,11 +1007,17 @@ class MainWindow(QMainWindow):
         if self._collect():
             self.project.save()
             self.statusBar().showMessage("Gespeichert.", 3000)
+            self._fill_langs(select=self._lang_shown)
             self._reload_slots()
+
+    def _view_slots(self):
+        """Slots of the list: the shared topic slots plus the fillers of the language shown."""
+        lang = self._view_lang if self._view_lang in self.project.languages() else None
+        return self.project.slots(lang=lang)
 
     def _reload_slots(self):
         try:
-            self.slots = self.project.sync_manifest(self.project.slots())
+            self.slots = self.project.sync_manifest(self._view_slots())
         except Exception as e:  # noqa: BLE001
             self._log(f"Quelle konnte nicht gelesen werden: {e}")
             self.slots = []
@@ -935,6 +1177,7 @@ class MainWindow(QMainWindow):
     def _start(self, fn, on_done=None, label=""):
         if self.job and self.job.isRunning():
             return
+        self._summary_start = self.project.config.get("summary", "") if self.project else ""
         self.job = Job(fn, self)
         self.job.log.connect(self._log)
         self.job.progress.connect(self._progress)
@@ -958,6 +1201,10 @@ class MainWindow(QMainWindow):
         for b in getattr(self, "action_buttons", []):
             b.setEnabled(not busy)
         self.btn_cancel.setEnabled(busy)
+        if not busy and self.project and self.project.config.get("summary", "") != self._summary_start:
+            # a job wrote the summary (first use of an LLM function): show it before the form is collected again
+            self.ed_summary.setPlainText(self.project.config.get("summary", ""))
+            self._summary_start = self.project.config.get("summary", "")
         if busy:
             self.progress.setRange(0, 0)
         else:
@@ -1072,10 +1319,12 @@ class MainWindow(QMainWindow):
             self._start(lambda ctx: pipeline.check(self.project, ctx, keys={s.key}, fix=False),
                         on_done=lambda _: self._refresh_slots(), label=f"agy prüft „{s.title}“ …")
 
-    def run_build(self):
+    def run_build(self, langs=None):
+        """Build the PDFs of all enabled languages (or only `langs`)."""
         if self._ready():
-            self._start(lambda ctx: pipeline.build(self.project, ctx), on_done=self._built,
-                        label="Baue PDF …")
+            langs = langs if isinstance(langs, list) else None
+            self._start(lambda ctx: pipeline.build(self.project, ctx, langs), on_done=self._built,
+                        label="Baue PDF …" if not langs or len(langs) == 1 else f"Baue {len(langs)} PDFs …")
 
     def run_all(self):
         if self._ready():
@@ -1085,12 +1334,27 @@ class MainWindow(QMainWindow):
                 return pipeline.build(self.project, ctx)
             self._start(work, on_done=self._built, label="Kompletter Durchlauf …")
 
-    def _built(self, result):
+    def _built(self, results):
         self._after_change()
-        path, pages = result
-        self.statusBar().showMessage(f"PDF fertig: {pages} Seiten", 8000)
-        if QMessageBox.question(self, "PDF fertig", f"{path.name} ({pages} Seiten) öffnen?") == QMessageBox.Yes:
-            self._open_file(path)
+        ok = [r for r in results if r.path]
+        if len(results) == 1:
+            r = results[0]
+            self.statusBar().showMessage(f"PDF fertig: {r.pages} Seiten", 8000)
+            if QMessageBox.question(self, "PDF fertig", f"{r.path.name} ({r.pages} Seiten) öffnen?") == QMessageBox.Yes:
+                self._open_file(r.path)
+            return
+        lines = [f"{lang_label(r.lang)}: {r.path.name} ({r.pages} Seiten)" if r.path
+                 else f"{lang_label(r.lang)}: FEHLER – {r.error}" for r in results]
+        self.statusBar().showMessage(f"{len(ok)} von {len(results)} PDFs fertig", 8000)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information if len(ok) == len(results) else QMessageBox.Warning)
+        box.setWindowTitle("PDFs fertig")
+        box.setText("\n".join(lines))
+        b_folder = box.addButton("Ordner öffnen", QMessageBox.AcceptRole)
+        box.addButton("Schließen", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is b_folder:
+            self._open_file(ok[0].path.parent)
 
     def _after_change(self):
         self._fill_form()
@@ -1135,6 +1399,25 @@ class MainWindow(QMainWindow):
             self.project.save()
         self._start(lambda ctx: pipeline.suggest_cover(self.project, current), on_done=done,
                     label="agy füllt Cover & Kopfzeile aus …")
+
+    def run_palette(self):
+        if not self._ready():
+            return
+        old = {k: self.project.config["theme"][k] for k in ("bg", "ink", "accent", "accent2")}
+
+        def done(r):
+            self.col_bg.set_color(r["bg"])
+            self.col_ink.set_color(r["ink"])
+            self.col_accent.set_color(r["accent"])
+            self.col_accent2.set_color(r["accent2"])
+            self._apply_accent(r["accent"])
+            self.lb_palette.setText(r.get("note", ""))
+            self._log(f"Palette: Hintergrund {r['bg']}, Text {r['ink']}, Akzent {r['accent']}, Akzent 2 "
+                      f"{r['accent2']} (vorher: {', '.join(old.values())})")
+            self._collect()
+            self.project.save()
+        self._start(lambda ctx: pipeline.suggest_palette(self.project), on_done=done,
+                    label="agy schlägt eine Palette vor …")
 
     def _kind(self):
         return self.cb_kind.currentData() or "rulebook"
@@ -1237,6 +1520,201 @@ class MainWindow(QMainWindow):
         if s and self._ready():
             self._start(lambda ctx: pipeline.images(self.project, ctx, keys={s.key}, regenerate=True),
                         on_done=lambda _: self._refresh_slots(), label=f"Generiere „{s.title}“ …")
+
+    # ---------- languages ----------
+    def _fill_langs(self, select=None):
+        """Language list of the tab (and the filler switch above the image list) from the project."""
+        self.lang_list.blockSignals(True)
+        self.lang_list.clear()
+        codes = self.project.languages() if self.project else []
+        for i, code in enumerate(codes):
+            item = QListWidgetItem(lang_label(code) + ("   · Hauptsprache" if i == 0 else ""))
+            if i:
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if self.project.translation(code).get("enabled", True)
+                                   else Qt.Unchecked)
+            self.lang_list.addItem(item)
+        self.lang_list.blockSignals(False)
+        row = codes.index(select) if select in codes else 0
+        if codes:
+            self.lang_list.blockSignals(True)
+            self.lang_list.setCurrentRow(row)
+            self.lang_list.blockSignals(False)
+        self._show_lang(row)
+        self.cb_view_lang.blockSignals(True)
+        self.cb_view_lang.clear()
+        for i, code in enumerate(codes):
+            self.cb_view_lang.addItem(lang_label(code) + (" (Hauptsprache)" if i == 0 else ""), code)
+        self.cb_view_lang.setCurrentIndex(max(0, self.cb_view_lang.findData(self._view_lang)))
+        self.cb_view_lang.blockSignals(False)
+        self.view_row.setVisible(len(codes) > 1)
+
+    def _view_changed(self):
+        self._store_slot_edits()
+        self._view_lang = self.cb_view_lang.currentData()
+        self._reload_slots()
+
+    def _on_lang_row(self, row):
+        self._store_lang_edits()
+        self._show_lang(row)
+
+    def _on_lang_checked(self, item):
+        row = self.lang_list.row(item)
+        codes = self.project.languages() if self.project else []
+        if 0 < row < len(codes):
+            self.project.translation(codes[row])["enabled"] = item.checkState() == Qt.Checked
+
+    def _show_lang(self, row):
+        codes = self.project.languages() if self.project else []
+        main = row <= 0
+        self._lang_shown = None if main or row >= len(codes) else codes[row]
+        self.lang_detail.setVisible(self._lang_shown is not None)
+        self.lb_lang_main.setVisible(self._lang_shown is None)
+        self.btn_lang_remove.setEnabled(self._lang_shown is not None and not (self.job and self.job.isRunning()))
+        if not self._lang_shown:
+            return
+        t = self.project.translation(self._lang_shown)
+        self.ed_l_source.setText(t.get("source", ""))
+        self.ed_l_output.setText(t.get("output", ""))
+        for key, ed in self.l_fields.items():
+            ed.setText(t.get(key, ""))
+        self.cb_l_level.setCurrentIndex(int(t.get("chapter_level") or 0))
+        self.lb_l_status.setText(self._lang_status(self._lang_shown))
+
+    def _store_lang_edits(self):
+        code = self._lang_shown
+        t = self.project.translation(code) if (code and self.project) else None
+        if not t:
+            return
+        t["source"], t["output"] = self.ed_l_source.text().strip(), self.ed_l_output.text().strip()
+        for key, ed in self.l_fields.items():
+            t[key] = ed.text().strip()
+        t["chapter_level"] = self.cb_l_level.currentIndex()
+
+    def _lang_status(self, code):
+        """Do the chapters and sections of the translation line up with the main language's?"""
+        try:
+            issues = self.project.alignment_issues(code)
+            shared = sum(1 for s in self.project.slots() if s.kind != "filler")
+        except Exception as e:  # noqa: BLE001
+            return f"<span style='color:#e06060'>{html.escape(str(e))}</span>"
+        if not issues:
+            return (f"<span style='color:#4fd18b'>✓ Gleiche Gliederung wie die Hauptsprache – "
+                    f"{shared} Bildplätze werden geteilt.</span>")
+        return ("<span style='color:#e0a35a'>Die Gliederung weicht von der Hauptsprache ab. Bilder werden nach "
+                "Reihenfolge zugeordnet, Überzähliges bekommt keins:<br>"
+                + "<br>".join("• " + html.escape(i) for i in issues[:6]) + "</span>")
+
+    def add_language(self):
+        if not self.project:
+            QMessageBox.information(self, "Sprachen", "Bitte zuerst ein Projekt öffnen oder anlegen.")
+            return
+        src, _ = QFileDialog.getOpenFileName(
+            self, "Übersetzung wählen (Markdown, Word, PDF, Text)",
+            str(self.project.source_path.parent if self.project.source_path else Path.home()), importer.SOURCE_FILTER)
+        if not src:
+            return
+        dlg = AddLanguageDialog(self, Path(src), importer.sniff_language(src), self.project)
+        if dlg.exec() != QDialog.Accepted or not self._ready():
+            return
+        code, keep = dlg.code(), dlg.keep_images()
+        model = self.cb_agy.currentText().strip() or DEFAULTS["agy"]["model"]
+        kind = self._kind()
+
+        def work(ctx):
+            if Path(src).suffix.lower() not in (".md", ".markdown"):
+                ctx.log("Importiere Übersetzung – bitte das Ergebnis danach kurz prüfen.")
+            importer.import_translation(self.project, code, src, ctx, model, kind, keep_images=keep)
+            return code
+
+        def done(code):
+            self._fill_langs(select=code)
+            self._reload_slots()
+            self._log(f"Sprache {lang_label(code)} hinzugefügt. Titel und Kopfzeile lassen sich mit „Texte "
+                      "automatisch ausfüllen“ übersetzen.")
+        self._start(work, on_done=done, label=f"Füge Übersetzung ({code}) hinzu …")
+
+    def remove_language(self):
+        code = self._lang_shown
+        if not (code and self.project):
+            return
+        if QMessageBox.question(
+                self, "Sprache entfernen", f"{lang_label(code)} aus dem Projekt nehmen?\n\nDas Markdown bleibt im "
+                "Ordner; die Füllbilder dieser Sprache wandern nach .build/removed/.") != QMessageBox.Yes:
+            return
+        self._collect()
+        self.project.remove_translation(code)
+        self.project.save()
+        self._lang_shown = None
+        if self._view_lang == code:
+            self._view_lang = None
+        self._log(f"Sprache {code} entfernt.")
+        self._fill_langs()
+        self._reload_slots()
+
+    def strip_language_images(self):
+        code = self._lang_shown
+        src = self.project.source_for(code) if (code and self.project) else None
+        if not (src and src.exists()):
+            QMessageBox.information(self, "Bilder entfernen", "Das Markdown dieser Übersetzung wurde nicht gefunden.")
+            return
+        self._collect()
+        images = importer.list_images(src.read_text(encoding="utf-8"))
+        if not images:
+            QMessageBox.information(self, "Bilder entfernen", "Im Markdown dieser Übersetzung gibt es keine Bild-Verweise.")
+            return
+        dlg = StripImagesDialog(self, src, images)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        n = importer.strip_translation_images(self.project, code, dlg.indexes)
+        self._log(f"{n} Bild-Verweis(e) aus {src.name} entfernt (Sicherung: *.vor-bildentfernung.md).")
+        self.lb_l_status.setText(self._lang_status(code))
+        self._reload_slots()
+
+    def run_lang_cover_auto(self):
+        code = self._lang_shown
+        if not (code and self._ready()):
+            return
+        current = {key: ed.text().strip() for key, ed in self.l_fields.items()}
+        if any(current.values()) and QMessageBox.question(
+                self, "Texte ausfüllen", "Die bisherigen Einträge dieser Sprache werden durch die Vorschläge von "
+                "agy ersetzt. Fortfahren?") != QMessageBox.Yes:
+            return
+
+        def done(r):
+            if self._lang_shown != code:
+                return
+            for key, ed in self.l_fields.items():
+                ed.setText(r.get(key, ""))
+            self._log(f"Texte ({code}): " + " | ".join(r[k] for k in pipeline.COVER_KEYS if r.get(k)))
+            self._collect()
+            self.project.save()
+        self._start(lambda ctx: pipeline.suggest_cover(self.project, current, code), on_done=done,
+                    label=f"agy füllt Cover & Kopfzeile ({code}) aus …")
+
+    def _pick_lang_source(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Markdown der Übersetzung", self.ed_l_source.text(),
+                                           "Markdown (*.md *.markdown)")
+        if p:
+            self.ed_l_source.setText(p)
+
+    def _pick_lang_output(self):
+        p, _ = QFileDialog.getSaveFileName(self, "PDF speichern unter", self.ed_l_output.text(), "PDF (*.pdf)")
+        if p:
+            self.ed_l_output.setText(p)
+
+    def _open_pdf(self):
+        if not self.project:
+            self._open_file(None)
+            return
+        codes = self.project.languages()
+        if len(codes) == 1:
+            self._open_file(self.project.output_path)
+            return
+        menu = QMenu(self)
+        for code in codes:
+            menu.addAction(lang_label(code), lambda c=code: self._open_file(self.project.output_for(c)))
+        menu.exec(QCursor.pos())
 
     # ---------- engine helpers ----------
     def _connect_comfy(self, quiet=False):
@@ -1430,9 +1908,42 @@ class MainWindow(QMainWindow):
 
     # ---------- misc ----------
     def _pick_source(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Markdown-Quelle", self.ed_source.text(), "Markdown (*.md *.markdown)")
-        if p:
-            self.ed_source.setText(p)
+        """Markdown is taken as it is; Word, PDF and text are converted like when creating a project."""
+        p, _ = QFileDialog.getOpenFileName(self, "Quelle (Markdown, Word, PDF, Text)", self.ed_source.text(),
+                                           importer.SOURCE_FILTER)
+        if not p:
+            return
+        if Path(p).suffix.lower() in (".md", ".markdown"):
+            self._set_source(p)
+            return
+        if not self.project:
+            QMessageBox.information(self, "Quelle", "Bitte zuerst ein Projekt öffnen oder anlegen.")
+            return
+        srcp = Path(p)
+        dest = self.project.root / (srcp.stem + ".md")
+        if dest.exists() and QMessageBox.question(
+                self, "Quelle", f"{dest.name} gibt es im Projektordner schon und wird durch den Import "
+                "überschrieben. Fortfahren?") != QMessageBox.Yes:
+            return
+        if not self._ready():
+            return
+        model = self.cb_agy.currentText().strip() or DEFAULTS["agy"]["model"]
+        kind = self._kind()
+
+        def work(ctx):
+            ctx.log("Importiere Dokument – bitte das Ergebnis danach kurz prüfen.")
+            return importer.to_markdown(srcp, dest, ctx, model, kind)
+        self._start(work, on_done=lambda md: self._set_source(str(md)))
+
+    def _set_source(self, path):
+        """A different source is a different book: the stored summary no longer applies."""
+        if self.project and Path(path).resolve() != (self.project.source_path or Path()).resolve():
+            self.ed_summary.clear()
+        self.ed_source.setText(path)
+        if self.project:
+            self._collect()
+            self.project.save()
+            self._reload_slots()
 
     def _pick_output(self):
         p, _ = QFileDialog.getSaveFileName(self, "PDF speichern unter", self.ed_output.text(), "PDF (*.pdf)")

@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 CHAPTER_TEXT_LIMIT = 14000
-OVERVIEW_TEXT_LIMIT = 6000
+SUMMARY_TEXT_LIMIT = 12000
 
 RULEBOOK_RULES = """Rules for every prompt:
 - One concrete, vivid scene that shows what the section is about (its mechanic, theme or example),
@@ -248,11 +248,29 @@ def run(prompt, schema, model=None, timeout=600):
     raise AgyError(f"agy-Fehler ({data.get('status')}): {(data.get('error') or data.get('response') or '')[:400]}")
 
 
-def plan_global(doc, title, model=None, kind="rulebook"):
+def summarize(title, outline, excerpts, model=None, kind="rulebook"):
+    """Short summary of the whole book. Written once (the first time an LLM function needs to know the
+    book) and stored in the project; later calls send this instead of excerpts of the text."""
+    pr = profile(kind)
+    prompt = f"""You summarize a {pr['noun']} so that other assistants (art direction, color choice, cover
+texts, style suggestions) can work from your summary without reading the book.
+Book title: {title or '(unknown)'}
+
+Table of contents:
+{outline[:3000]}
+
+Excerpts from the start of each chapter:
+{excerpts[:SUMMARY_TEXT_LIMIT]}
+
+Write the summary in English, 80-150 words, plain text without lists: what this is, its topic/genre and
+setting, the audience, the tone and mood, what the chapters cover, and the concrete places, characters,
+objects or imagery that stand out (they inspire illustrations and colors). Use only facts from the text."""
+    schema = {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}
+    return str(run(prompt, schema, model)["summary"]).strip()
+
+
+def plan_global(outline, summary, title, model=None, kind="rulebook"):
     """Genre summary, a style suggestion, theme colors, cover and background prompts."""
-    outline = "\n".join(f"- {c.full_title}" + "".join(f"\n  - {s.title}" for s in c.sections)
-                        for c in doc.chapters)
-    sample = doc.intro_md + "\n\n" + "\n\n".join(c.intro_md for c in doc.chapters)
     pr = profile(kind)
     prompt = f"""You are the art director for an illustrated {pr['noun']} PDF.
 Book title: {title}
@@ -260,8 +278,8 @@ Book title: {title}
 Table of contents:
 {outline}
 
-Excerpt:
-{sample[:OVERVIEW_TEXT_LIMIT]}
+Summary of the book:
+{summary}
 
 Return:
 - world: 2-3 sentences (English) {pr['world_desc']}.
@@ -282,13 +300,14 @@ Return:
 
 def plan_chapter(chapter, slots, world, model=None, style="", kind="rulebook"):
     """Prompts for the chapter banner and its section slots: {key: prompt}."""
+    from .project import strip_filler_title     # project imports this module
     text = chapter.intro_md + "".join(f"\n\n### {s.title}\n{s.body_md}" for s in chapter.sections)
     def describe(s):
         if s.kind == "chapter":
             return f'chapter banner for "{s.title}"'
         if s.kind == "filler":
             shape = "portrait" if s.aspect < 0.9 else ("square" if s.aspect < 1.25 else "landscape")
-            return (f'additional {shape} illustration for "{s.title.removeprefix("Füllbild: ")}" '
+            return (f'additional {shape} illustration for "{strip_filler_title(s.title)}" '
                     f'- a different moment, place or character than its section image')
         return f'section "{s.title}"'
     wanted = "\n".join(f"- {s.key}: {describe(s)}" for s in slots)
@@ -489,6 +508,7 @@ COMPRESS_TASK_DOCUMENT = {"world": "a short description of the document's topic,
                                    "other illustrators"}
 
 COMPRESS_TASK = {
+    "summary": "a short summary of the book that other assistants use as background for art direction",
     "style": "a style suffix that is appended to every image prompt (medium, line work, palette, "
              "lighting, quality tags)",
     "negative": "a negative prompt (things the image model must avoid)",
@@ -512,7 +532,7 @@ SUGGEST_TASK = {
 }
 
 
-def suggest_field(field, title, outline, sample, current, model_hint, model=None, kind="rulebook"):
+def suggest_field(field, title, outline, summary, current, model_hint, model=None, kind="rulebook"):
     """Propose the content of one project field (world/topic, style, negative prompt, style wish)."""
     pr = profile(kind)
     task = SUGGEST_TASK[field].format(world_desc=pr["world_desc"], style_for=pr["style_for"])
@@ -522,8 +542,8 @@ def suggest_field(field, title, outline, sample, current, model_hint, model=None
 Book title: {title or '(unknown)'}
 Outline:
 {outline[:1800]}
-Excerpt:
-{sample[:3000]}
+Summary of the book:
+{summary}
 
 What the user already has (use it, stay consistent with it): 
 {have}
@@ -557,11 +577,12 @@ compressed: the result. removed: short German list of what you removed and why."
     return run(prompt, schema, model)
 
 
-def refine_style(wish, base_style, world, model_hint, model=None, kind="rulebook"):
+def refine_style(wish, base_style, world, model_hint, model=None, kind="rulebook", summary=""):
     """Turn a free-text style wish ("should look like One Piece") into a style suffix."""
     prompt = f"""You are an expert prompt engineer for image-generation models.
 {model_hint}
 {profile(kind)['world_label']} being illustrated: {world or profile(kind)['noun']}
+{('Summary of the book: ' + summary) if summary else ''}
 Current style suffix: {base_style or '(none)'}
 User's style wish (any language): {wish}
 
@@ -574,6 +595,31 @@ near-black background, and explain your choice in one short sentence (German).""
     schema = {"type": "object", "properties": {
         "style": {"type": "string"}, "accent": {"type": "string"}, "accent2": {"type": "string"},
         "note": {"type": "string"}}, "required": ["style", "accent", "accent2", "note"]}
+    return run(prompt, schema, model)
+
+
+def suggest_palette(summary, title, style, wish, current, model=None, kind="rulebook"):
+    """Four PDF layout colors (page background, text, two accents) for the book and its art style.
+    Gets the summary of the book and the style the user wants, never the book text."""
+    pr = profile(kind)
+    prompt = f"""You choose the color palette of an illustrated {pr['noun']} PDF.
+Book title: {title or '(unknown)'}
+Summary of the book: {summary or '(none)'}
+Art style of all illustrations (applied to every image; the palette must go with it): {style or '(none yet)'}
+{('The user wants this look: ' + wish) if wish else ''}
+Colors the layout has now: {current}
+
+The PDF has dark pages: light text on a dark background, accent colors for headings, chapter numbers,
+initials and rules. Pick colors that echo the illustrations' palette and the mood of the book:
+- bg: the page color, very dark (it may carry a hint of the book's hue, no pure black needed).
+- ink: the body text color, light, easy to read on bg (contrast at least 7:1).
+- accent: headings and highlights, clearly distinct from the text color, at least 4.5:1 on bg.
+- accent2: a second accent for chapter numbers and initials that works next to accent.
+Hex colors only (#rrggbb). note: one short German sentence on why this palette fits."""
+    schema = {"type": "object", "properties": {
+        "bg": {"type": "string"}, "ink": {"type": "string"}, "accent": {"type": "string"},
+        "accent2": {"type": "string"}, "note": {"type": "string"}},
+        "required": ["bg", "ink", "accent", "accent2", "note"]}
     return run(prompt, schema, model)
 
 

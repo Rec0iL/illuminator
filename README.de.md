@@ -31,7 +31,7 @@ Bilder im Markdown mit relativem Pfad (z.B. `docs/screenshots/x.png`) werden zue
 ## Ablauf in der Oberfläche
 
 1. **Neues Projekt…**: Regelwerk wählen (`.md`, `.docx`, `.pdf`, `.txt`) und einen leeren Projektordner. Word-Dateien werden lokal über ihre Überschriftenstile umgewandelt, PDF und Text abschnittsweise von agy (Wortlaut bleibt erhalten). Die Überschriften-Ebenen richtet das Tool danach am Original aus: Kapitel sind die Einträge der ersten Ebene im Inhaltsverzeichnis (Word-Stil mit Punktlinien und Seitenzahlen); Teile vor dem ersten solchen Kapitel, die in der größten Schrift gesetzt sind, werden ebenfalls Kapitel. Darunter ergeben die Schriftgrößen der Überschriften die Ebenen, und ein Untertitel in derselben Zeile wird mit seiner Überschrift zusammengeführt. Das Verzeichnis selbst landet nicht im Text. Für ein bereits importiertes Projekt: `illuminator.py restructure PROJEKT ORIGINAL.pdf` (Sicherung `*.vor-restructure.md`, Bilder von Plätzen, die nur zwischen Kapitel und Abschnitt wechseln, werden mitgenommen). **Das erzeugte Markdown kurz prüfen** (Toolbar: „Quelle öffnen“), vor allem bei PDFs.
-2. **Buch**: oben der Schalter **Inhalt** (PnP-Regelwerk / Anderes Dokument, siehe „Inhaltstyp“). Titel, Untertitel, Kicker, Tagline, Kopfzeile, Kapitel-Label, Farben, Schriftgröße, Blocksatz. „Alles automatisch ausfüllen (agy)“ liest den Anfang des Regelwerks und schlägt alle Cover- und Kopfzeilentexte in der Sprache des Buches vor (vorhandene Einträge werden nach Rückfrage ersetzt).
+2. **Buch**: als **Quelle** geht Markdown, Word, PDF oder Text (die letzten drei werden wie beim Anlegen eines Projekts umgewandelt). Oben der Schalter **Inhalt** (PnP-Regelwerk / Anderes Dokument, siehe „Inhaltstyp“). Titel, Untertitel, Kicker, Tagline, Kopfzeile, Kapitel-Label, Farben, Schriftgröße, Blocksatz. „Alles automatisch ausfüllen (agy)“ liest den Anfang des Regelwerks und schlägt alle Cover- und Kopfzeilentexte in der Sprache des Buches vor (vorhandene Einträge werden nach Rückfrage ersetzt).
 3. **Stil**: Vorlage wählen (Anime Action, Film Noir, Dark Fantasy, Comic …) oder einen freien **Stilwunsch** eintragen, z.B. „soll aussehen wie One Piece“, und **Mit agy verfeinern**. agy macht daraus einen Stil-Suffix, den das gewählte Bildmodell versteht, und schlägt passende Akzentfarben vor. Der Suffix bleibt editierbar. **Komprimieren** neben jedem Feld lässt agy Doppeltes, Widersprüche, Füllwörter und für das gewählte Modell wirkungslose Begriffe entfernen (bei Krea 2 z.B. „masterpiece, best quality“). Was entfernt wurde, steht im Log. **Vorschlagen** daneben lässt agy das Feld (Welt/Thema, Stilwunsch, Stil-Suffix, Negativ-Prompt) aus dem Buch, den anderen Feldern und dem Bildmodell vorschlagen; ein vorhandener Text wird erst nach Rückfrage ersetzt. Der Negativ-Vorschlag lässt Begriffe weg, die dem gewählten Stil widersprechen (bei Pixel Art z.B. „pixelated“, „lowres“).
 4. **Engine**: agy-Modell für die Prompts und die **Bild-Engine** (agy, Gemini API oder ComfyUI). Bei ComfyUI lädt „Verbinden“ die Modelle aus dem laufenden ComfyUI; unter **Bildmodell** stehen alle Modelle mit ihrer erkannten Bauart, die Einstellungen werden beim Auswählen automatisch gesetzt (siehe „Bildmodelle“). Bei agy und Gemini gibt es kaum etwas einzustellen.
 5. **① Prompts planen**: agy liest das Regelwerk, beschreibt Welt und Genre und schreibt für jeden Bildplatz ein Motiv. Ohne gesetzten Stil schlägt agy auch Stil und Farben vor.
@@ -77,6 +77,26 @@ Bildgröße und Hoch-/Querformat bewertet agy dabei nicht, die gibt das Tool vor
 Den gewählten Stil (z.B. Pixel Art) kennt agy bei Bildkontrolle, „Analysieren“ und Prompt-Erstellung und bewertet ihn nicht als Fehler: Verpixelung, niedrige Auflösung, begrenzte Palette, Dithering oder flache Schattierung werden nicht bemängelt, und widersprüchliche Begriffe (z.B. „pixelated“, „lowres“) kommen nicht in den Negativ-Prompt. Die Prompts selbst bleiben stilfrei, werden aber so geschrieben, dass sie im Stil gut lesbar sind.
 
 Liegt dein Projekt außerhalb aller `trustedWorkspaces`, meldet die Bildkontrolle „agy konnte das Bild nicht öffnen“. Dann den Projektordner (oder einen übergeordneten Ordner) dort eintragen. Erlaube agy dafür **nicht** pauschal alles.
+
+## Sprachen (Übersetzungen)
+
+Ein Projekt kann dasselbe Buch in mehreren Sprachen erzeugen, z.B. Englisch (Hauptsprache) plus Deutsch und Polnisch, in einem Durchlauf und ohne die Bilder neu zu erzeugen.
+
+- **Tab „Sprachen“ → Übersetzung hinzufügen…** nimmt eine Markdown-, Word-, PDF- oder Textdatei und fragt nach dem Sprachcode (aus dem Text geraten). Word und PDF werden wie beim Anlegen eines Projekts umgewandelt, das Markdown liegt danach in `translations/<code>/`. Auf der Kommandozeile: `illuminator.py add-lang PROJEKT DATEI --lang pl`.
+- **Die Bilder werden geteilt.** Cover, Seitenhintergrund, Kapitelbanner und Abschnittsbilder gehören zum Text der Hauptsprache. Kapitel und Abschnitte einer Übersetzung bekommen die Bilder des Kapitels/Abschnitts an derselben Position; die Übersetzung braucht also dieselbe Gliederung (gleich viele Kapitel und Abschnitte je Kapitel). Der Tab zeigt, ob die Gliederung passt, und listet Abweichungen auf; Blöcke ohne Gegenstück bekommen einfach kein Bild. Eine übersetzte Überschrift braucht nie ein neues Bild.
+- **Füllbilder gibt es pro Sprache.** Der übersetzte Text bricht anders um, die Lücken liegen woanders. Mit „Leerraum mit Füllbildern füllen“ misst jede Sprache ihre eigenen Lücken und bekommt eigene Plätze `fill-<code>-…` (in der Liste unter „Füllbilder für“, neben dem Sprachumschalter über der Liste). „Prompts planen“ und „Fehlende Bilder“ erfassen alle aktiven Sprachen.
+- **Texte pro Sprache:** Titel, Untertitel, Kicker, Tagline, Kopfzeile und Kapitel-Label stehen pro Übersetzung („Texte automatisch ausfüllen“ liest die Übersetzung und schreibt sie in deren Sprache). Farben, Stil und Layout sind gemeinsam. Die Sprache der Silbentrennung folgt dem Code.
+- **In einem Rutsch:** „③ PDF bauen“ und „▶ Alles“ setzen die Hauptsprache und jede angehakte Übersetzung nacheinander (standardmäßig `en.pdf`, `en.pl.pdf`, `en.de.pdf`; der Ausgabepfad ist pro Sprache änderbar). Eine fehlschlagende Sprache hält die anderen nicht auf. **Nur diese Sprache bauen** und `illuminator.py build PROJEKT --lang pl` setzen nur eine.
+- **Bilder aus einer Übersetzung entfernen:** Ein PDF-Import lässt die eigenen Bilder des Dokuments normalerweise weg (es wären die alten Illustrationen). Stehen im Markdown einer Übersetzung noch Bild-Verweise, entfernt **Bilder aus dem Markdown entfernen…** (Kommandozeile: `strip-images PROJEKT --lang pl [--list] [--only 0,3]`) alle oder nur die markierten; die Dateien bleiben, der Originaltext liegt danach als `*.vor-bildentfernung.md` daneben. Beim Hinzufügen überstimmt „Bilder aus dem Dokument übernehmen“ den Standard.
+
+## Kurzfassung und Palette: weniger Text für die LLM
+
+Die erste LLM-Funktion, die das Buch kennen muss (Planen, Vorschläge für Welt/Stil, Palette), schreibt einmal eine Kurzfassung des Buchs (ca. 100 Wörter aus Inhaltsverzeichnis und den ersten Zeilen jedes Kapitels) und speichert sie in `project.json` (`summary`, sichtbar und editierbar unter **Stil → Kurzfassung des Buchs**; „Vorschlagen“ schreibt sie neu, eine neue Quelle verwirft sie). Danach bekommen die buchbezogenen Funktionen diese Kurzfassung plus die Gliederung statt Textauszügen:
+
+- **Prompts planen** (Welt, Stil, Cover, Hintergrund): Gliederung + Kurzfassung. Die Prompts für Kapitel und Abschnitte brauchen weiter den echten Kapiteltext.
+- **Vorschlagen** neben Welt/Stil/Negativ/Wunsch: Gliederung + Kurzfassung + die anderen Felder.
+- **Buch → Palette vorschlagen (agy)**: Kurzfassung + aktueller Stil-Suffix + Stilwunsch + aktuelle Farben, sonst nichts. Liefert Hintergrund, Text und zwei Akzentfarben; fehlender Kontrast wird korrigiert (das Theme ist dunkel). Die alten Werte stehen im Log.
+- Die Cover-Texte lesen weiter den echten Textanfang (sie müssen daraus zitieren).
 
 ## Inhaltstyp: PnP-Regelwerk oder anderes Dokument
 
@@ -135,7 +155,11 @@ python3 illuminator.py plan   PROJEKT [--force] # Prompts schreiben (--force: al
 python3 illuminator.py images PROJEKT [--all]   # fehlende Bilder (--all: alle neu)
 python3 illuminator.py check  PROJEKT [--no-fix]  # Bilder mit agy prüfen (--no-fix: nur prüfen)
 python3 illuminator.py restructure PROJEKT ORIGINAL.pdf  # Überschriften-Ebenen nach dem Original richten
-python3 illuminator.py build  PROJEKT           # PDF setzen
+python3 illuminator.py build  PROJEKT [--lang pl]  # PDFs setzen (alle Sprachen oder nur eine)
+python3 illuminator.py add-lang PROJEKT DATEI --lang pl [--keep-images]  # Übersetzung hinzufügen (md, docx, pdf, txt)
+python3 illuminator.py remove-lang PROJEKT --lang pl
+python3 illuminator.py strip-images PROJEKT --lang pl [--list] [--only 0,3]  # Bild-Verweise aus einer Übersetzung entfernen
+python3 illuminator.py summary PROJEKT [--force]  # Kurzfassung des Buchs (neu) schreiben
 python3 illuminator.py all    PROJEKT           # plan + images + build
 ```
 
@@ -145,8 +169,9 @@ python3 illuminator.py all    PROJEKT           # plan + images + build
 projekt/
 ├── project.json   Einstellungen (Quelle, Ausgabe, Titel, Farben, Stil, Engine)
 ├── images.json    pro Bildplatz: Motiv-Prompt, Seed, Stil an/aus, optional Negativ-Prompt, Prüfergebnis
-├── images/        die generierten Bilder als JPEG (Name = Bildplatz-Schlüssel)
+├── images/        die generierten Bilder als JPEG (Name = Bildplatz-Schlüssel; `fill-<Sprache>-…` = Füllbild einer Übersetzung)
 ├── media/         Bilder aus importierten Word-/PDF-Regelwerken
+├── translations/  <Sprache>/ mit dem Markdown jeder Übersetzung
 └── .build/        Zwischendateien, Vorschauen, Bildkontrolle (nicht versionieren)
 ```
 

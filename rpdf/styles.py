@@ -149,3 +149,68 @@ def model_hint(config):
     if family.key in ("sdxl", "sd15"):
         return f"Image model: {name} ({family.label}; works best with comma-separated tags and weighted keywords)."
     return f"Image model: {name or 'Stable Diffusion checkpoint'} (works best with comma-separated tags)."
+
+
+# ---------- palette checks ----------
+def parse_hex(value):
+    """'#abc', 'aabbcc' -> (r, g, b), or None."""
+    h = str(value or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if len(h) == 6 else None
+    except ValueError:
+        return None
+
+
+def to_hex(rgb):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c))) for c in rgb)
+
+
+def _luminance(rgb):
+    lin = [c / 255 / 12.92 if c / 255 <= 0.04045 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast(a, b):
+    """WCAG contrast ratio of two (r, g, b) colors."""
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def ensure_contrast(color, bg, minimum):
+    """Lighten `color` step by step until it reads on the dark page color `bg` (the PDF theme is dark)."""
+    rgb = color
+    for step in range(21):
+        if contrast(rgb, bg) >= minimum:
+            break
+        rgb = tuple(c + (255 - c) * 0.05 for c in rgb)
+    return to_hex(rgb)
+
+
+MAX_BG_LIGHTNESS = 0.06      # relative luminance: the layout (white headings, dark scrims) needs a dark page
+
+
+def fit_palette(palette, fallback):
+    """Take a proposed palette {bg, ink, accent, accent2}, repair what cannot work on a dark page
+    (not a hex color, too light a background, too little contrast) and fill gaps from `fallback`."""
+    rgb = {k: parse_hex(palette.get(k)) or parse_hex(fallback[k]) for k in ("bg", "ink", "accent", "accent2")}
+    bg = rgb["bg"]
+    while _luminance(bg) > MAX_BG_LIGHTNESS:
+        bg = tuple(c * 0.85 for c in bg)
+    out = {"bg": to_hex(bg)}
+    bg = parse_hex(out["bg"])
+    out["ink"] = ensure_contrast(rgb["ink"], bg, 7.0)
+    out["accent"] = ensure_contrast(rgb["accent"], bg, 4.5)
+    out["accent2"] = ensure_contrast(rgb["accent2"], bg, 4.5)
+    return out
+
+
+def readable_accents(result, theme):
+    """Repair the accent colors an LLM proposed (keys accent, accent2) so that they read on the
+    theme's page color; a value that is not a color is replaced by the current one."""
+    bg = parse_hex(theme["bg"])
+    for key in ("accent", "accent2"):
+        rgb = parse_hex(result.get(key)) or parse_hex(theme[key])
+        result[key] = ensure_contrast(rgb, bg, 4.5)
+    return result
