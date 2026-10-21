@@ -97,17 +97,41 @@ def style_for_judging(style):
             "section, text artifacts and elements that do not belong, always within what the style can show.")
 
 
+def wish_for_planning():
+    """The user's standing wish for all image prompts (project setting "prompt_wish"), as a prompt block."""
+    wish = BACKEND["prompt_wish"].strip()
+    if not wish:
+        return ""
+    return ("Instruction from the user for EVERY image prompt (it may be written in any language; the prompt "
+            "itself stays English). Follow it strictly. It overrides the rules above wherever they disagree, "
+            f"for example about realism or which objects may appear:\n{wish}")
+
+
+def wish_for_judging():
+    """Same wish for the image check: it is intentional and the image has to follow it."""
+    wish = BACKEND["prompt_wish"].strip()
+    if not wish:
+        return ""
+    return ("Instruction from the user that applies to every motif of this book (chosen on purpose, may be "
+            f"written in any language): {wish}\n"
+            "Never criticize the result as unrealistic or out of place because of it. Judge whether the image "
+            "follows it: an element that contradicts the instruction (for example the ordinary version of "
+            "something the user wants replaced) is a problem; better_prompt must keep following it.")
+
+
 class AgyError(RuntimeError):
     pass
 
 
-# which CLI writes prompts and judges images: "agy" (Antigravity) or "claude" (Claude Code)
-BACKEND = {"llm": "agy", "claude_model": "sonnet"}
+# which CLI writes prompts and judges images: "agy" (Antigravity) or "claude" (Claude Code), and the
+# project's standing wish for all image prompts; both come from the project config (see configure)
+BACKEND = {"llm": "agy", "claude_model": "sonnet", "prompt_wish": ""}
 CLAUDE_MODELS = ["sonnet", "opus", "haiku"]
 
 
 def configure(cfg):
-    """Take the prompt generator from a project config (cfg["llm"], cfg["claude"]["model"])."""
+    """Take the prompt generator (cfg["llm"], cfg["claude"]["model"]) and the prompt wish from a project config."""
+    BACKEND["prompt_wish"] = cfg.get("prompt_wish") or ""
     BACKEND["llm"] = cfg.get("llm") or "agy"
     BACKEND["claude_model"] = (cfg.get("claude") or {}).get("model") or "sonnet"
 
@@ -289,7 +313,9 @@ Return:
 - cover: {pr['cover']}
 - background: {pr['background']}
 
-{pr['rules']}"""
+{pr['rules']}
+
+{wish_for_planning()}"""
     schema = {"type": "object", "properties": {
         "world": {"type": "string"}, "style": {"type": "string"},
         "accent": {"type": "string"}, "accent2": {"type": "string"},
@@ -322,7 +348,9 @@ Chapter "{chapter.full_title}":
 Write one prompt for each of these keys:
 {wanted}
 
-{pr['rules']}"""
+{pr['rules']}
+
+{wish_for_planning()}"""
     schema = {"type": "object", "properties": {"images": {"type": "array", "items": {
         "type": "object", "properties": {"key": {"type": "string"}, "prompt": {"type": "string"}},
         "required": ["key", "prompt"]}}}, "required": ["images"]}
@@ -377,7 +405,9 @@ Write one fresh image description for this {slot.kind} image ({_orientation(slot
 {'Keep the lower third dark and empty for the title.' if slot.kind == 'cover' else ''}
 Put the description itself into "image_prompt" - not a note that you wrote it.
 
-{pr['rules']}"""
+{pr['rules']}
+
+{wish_for_planning()}"""
     schema = {"type": "object", "properties": {"image_prompt": {
         "type": "string", "description": "The image description itself, 25-60 English words."}},
         "required": ["image_prompt"]}
@@ -485,6 +515,7 @@ def check_image(image_path, work_dir, slot, prompt_used, world, model=None, styl
     prompt = f"""The image was generated to illustrate a {pr['noun']}.
 {pr['world_label']}: {world or 'unknown'}
 {style_for_judging(style)}
+{wish_for_judging()}
 Section: "{slot.title}"
 Section text (excerpt):
 {slot.context_md[:1500]}
@@ -508,6 +539,7 @@ def analyse_image(image_path, work_dir, slot, prompt_used, negative_used, world,
 {model_hint}
 {pr['world_label']}: {world or 'unknown'}
 {style_for_judging(style)}
+{wish_for_judging()}
 Section: "{slot.title}"
 Section text (excerpt):
 {slot.context_md[:1500]}

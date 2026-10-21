@@ -48,6 +48,7 @@ DEFAULTS = {
     "negative": "worst quality, low quality, blurry, jpeg artifacts, bad anatomy, watermark, "
                 "text, letters, signature, logo, deformed, extra limbs, lowres",
     "world": "",                   # short genre/setting summary written by the planner
+    "prompt_wish": "",             # user instruction taken into every image prompt (and the image check)
     "summary": "",                 # short summary of the book, written on the first LLM use (see summarize())
     "translations": [],            # more languages: [{lang, source, output, title, ..., chapter_level}]
     "llm": "agy",                  # prompt generator and image judge: agy | claude (Claude Code CLI)

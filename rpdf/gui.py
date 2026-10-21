@@ -698,6 +698,21 @@ class MainWindow(QMainWindow):
         self.ed_negative = text_box(70)
         f.addRow(self._field_head("Negativ-Prompt (Standard für alle Bilder)", "negative", self.ed_negative))
         f.addRow(self.ed_negative)
+        f.addRow(section_label("Wunsch für alle Bild-Prompts"))
+        self.ed_prompt_wish = text_box(90)
+        self.ed_prompt_wish.setPlaceholderText(
+            "z.B. „Alle Figuren sind Mäuse. Keine echten Waffen: Waffen sind Alltagsdinge – ein Holzschwert ist "
+            "ein Zahnstocher, ein besseres Schwert eine Nadel, ein Hammer ein Fingerhut.“")
+        self.ed_prompt_wish.setToolTip(
+            "Gilt für jeden Bild-Prompt (Cover, Hintergrund, Kapitel, Abschnitte, Füllbilder, neue Prompts, Bilder "
+            "neu machen) und für die Bildkontrolle. Schreib es in deiner Sprache, die Prompts bleiben englisch.")
+        f.addRow(self.ed_prompt_wish)
+        wish_hint = QLabel("Gilt für neue Prompts und die Bildkontrolle. Schon geschriebene Prompts ändern sich erst, "
+                           "wenn du „Prompts planen“ mit „vorhandene überschreiben“ laufen lässt.")
+        wish_hint.setWordWrap(True)
+        wish_hint.setObjectName("dim")
+        wish_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        f.addRow(wish_hint)
         self.ed_world = text_box(80)
         self.world_head = self._field_head("Welt (von der KI erkannt, für alle Prompts)", "world", self.ed_world)
         f.addRow(self.world_head)
@@ -1167,6 +1182,7 @@ class MainWindow(QMainWindow):
         self.ed_style.setPlainText(c.get("style", ""))
         self.ed_negative.setPlainText(c.get("negative", ""))
         self.ed_world.setPlainText(c.get("world", ""))
+        self.ed_prompt_wish.setPlainText(c.get("prompt_wish", ""))
         self.cb_llm.setCurrentIndex(max(0, self.cb_llm.findData(c.get("llm", "agy"))))
         self._llm_shown = self.cb_llm.currentData()
         self.cb_agy.clear()
@@ -1225,6 +1241,7 @@ class MainWindow(QMainWindow):
         c["style"] = self.ed_style.toPlainText().strip()
         c["negative"] = self.ed_negative.toPlainText().strip()
         c["world"] = self.ed_world.toPlainText().strip()
+        c["prompt_wish"] = self.ed_prompt_wish.toPlainText().strip()
         self._store_lang_edits()
         c["llm"] = self.cb_llm.currentData()
         c["claude" if c["llm"] == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
