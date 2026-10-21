@@ -6,7 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPainterPath, QPalette,
                            QPen, QPixmap)
 from PySide6.QtWidgets import (
@@ -319,6 +319,61 @@ def section_label(text):
     return l
 
 
+class HoverPreview(QObject):
+    """Shows the picture behind a list item large next to the mouse while it rests on the item. The item's
+    data (Qt.UserRole) holds the file path; items without one show nothing."""
+    SIZE = 520
+
+    def __init__(self, list_widget):
+        super().__init__(list_widget)
+        self.list = list_widget
+        self.list.setMouseTracking(True)
+        self.list.viewport().setMouseTracking(True)
+        self._viewport = self.list.viewport()      # kept so the filter never touches a deleted list
+        self._viewport.installEventFilter(self)
+        self.label = QLabel(list_widget.window(), Qt.ToolTip)
+        self.label.setStyleSheet("background:#0b0c10; border:1px solid #2fe6ff; padding:4px;")
+        self._cache = {}
+        self._shown = None
+
+    def _pixmap(self, path):
+        if path not in self._cache:
+            pm = QPixmap(path)
+            big = pm.width() > self.SIZE or pm.height() > self.SIZE      # only shrink, never blow up small pictures
+            self._cache[path] = pm.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio,
+                                          Qt.SmoothTransformation) if big else pm
+        return self._cache[path]
+
+    def hide(self):
+        self.label.hide()
+        self._shown = None
+
+    def hover(self, pos, global_pos):
+        item = self.list.itemAt(pos)
+        path = item.data(Qt.UserRole) if item else None
+        pm = self._pixmap(path) if path else QPixmap()
+        if pm.isNull():
+            self.hide()
+            return
+        if path != self._shown:
+            self.label.setPixmap(pm)
+            self.label.adjustSize()
+            self._shown = path
+        screen = self.list.screen().availableGeometry()
+        x = min(global_pos.x() + 24, screen.right() - self.label.width())
+        y = min(max(global_pos.y() - self.label.height() // 2, screen.top()), screen.bottom() - self.label.height())
+        self.label.move(x, y)
+        self.label.show()
+
+    def eventFilter(self, obj, ev):
+        if obj is self._viewport:
+            if ev.type() == QEvent.MouseMove:
+                self.hover(ev.position().toPoint(), ev.globalPosition().toPoint())
+            elif ev.type() in (QEvent.Leave, QEvent.Wheel, QEvent.MouseButtonPress):
+                self.hide()
+        return False
+
+
 class AddLanguageDialog(QDialog):
     """Language code and image handling for a translation that is about to be imported."""
 
@@ -388,7 +443,9 @@ class StripImagesDialog(QDialog):
             pm = QPixmap(str(md_path.parent / it["src"])) if not it["src"].startswith(("http", "data:")) else QPixmap()
             if not pm.isNull():
                 item.setIcon(QIcon(pm.scaled(72, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+                item.setData(Qt.UserRole, str(md_path.parent / it["src"]))
             self.list.addItem(item)
+        self.hover = HoverPreview(self.list)
         v.addWidget(self.list, 1)
         row = QHBoxLayout()
         for text, state in (("Alle markieren", Qt.Checked), ("Keine markieren", Qt.Unchecked)):
@@ -443,9 +500,11 @@ class MediaDialog(QDialog):
                 pm = QPixmap(str(m["path"]))
                 if not pm.isNull():
                     item.setIcon(QIcon(pm.scaled(72, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+                    item.setData(Qt.UserRole, str(m["path"]))
             elif not m["web"]:
                 item.setForeground(QColor("#e06060"))
             self.list.addItem(item)
+        self.hover = HoverPreview(self.list)
         v.addWidget(self.list, 1)
         row = QHBoxLayout()
         for text, state in (("Alle ins PDF", Qt.Checked), ("Alle auslassen", Qt.Unchecked)):
