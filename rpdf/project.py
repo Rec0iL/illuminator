@@ -31,6 +31,7 @@ DEFAULTS = {
     "layout": {
         "section_images": True,
         "page_texture": True,
+        "document_images": True,   # images that stand in the source text (media/…, screenshots, badges) go into the PDF
         "bg_dim_adjust": 0,        # page background: -100 darker … +100 brighter than the calculated optimum
         "justify": True,
         "font_size_pt": 9.6,
@@ -52,6 +53,7 @@ DEFAULTS = {
                 "text, letters, signature, logo, deformed, extra limbs, lowres",
     "world": "",                   # short genre/setting summary written by the planner
     "prompt_wish": "",             # user instruction taken into every image prompt (and the image check)
+    "media_exclude": [],           # image references of the source texts that stay out of the PDF (as written)
     "gen_count": 1,                # images made per slot in one go (all are kept as variants to choose from)
     "summary": "",                 # short summary of the book, written on the first LLM use (see summarize())
     "translations": [],            # more languages: [{lang, source, output, title, ..., chapter_level}]
@@ -385,11 +387,65 @@ class Project:
         if not src or not src.exists():
             raise FileNotFoundError(f"Quelldatei nicht gefunden: {src}")
         level = (self.translation(tag).get("chapter_level") if tag else self.config.get("chapter_level")) or None
-        doc = mdparse.parse(src.read_text(encoding="utf-8"), chapter_level=level,
+        doc = mdparse.parse(self.source_text(tag), chapter_level=level,
                             appendix_patterns=self.config["appendix_patterns"])
         if tag:
             align_keys(doc, self.document(), tag)
         return doc
+
+    # ---------- media of the source texts ----------
+    def source_text(self, lang=None, filtered=True):
+        """Markdown of one language. filtered: without the images the project leaves out (layout.document_images,
+        media_exclude); the source files themselves are never changed by that."""
+        src = self.source_for(lang)
+        if not src or not src.exists():
+            raise FileNotFoundError(f"Quelldatei nicht gefunden: {src}")
+        text = src.read_text(encoding="utf-8")
+        if filtered and (not self.config["layout"].get("document_images", True) or self.config.get("media_exclude")):
+            from . import importer
+            text = importer.strip_images(text, predicate=lambda ref: not self.media_included(ref))[0]
+        return text
+
+    def media_included(self, src):
+        return bool(self.config["layout"].get("document_images", True)) and src not in self.config.get("media_exclude", [])
+
+    def resolve_media(self, src, lang=None):
+        """The file an image reference points to (same search as the layout: next to the source, then bilder/ and
+        the project folder), or None for web images and missing files."""
+        if re.match(r"^(https?|file|data):", src):
+            return None
+        source = self.source_for(lang)
+        rel = Path(src.replace("%20", " "))
+        for cand in ((source.parent / rel) if source else None, self.root / "bilder" / rel,
+                     self.root / "bilder" / rel.name, self.root / rel, self.root / rel.name):
+            if cand and cand.is_file():
+                return cand.resolve()
+        return None
+
+    def media(self):
+        """Every image reference of all source texts (each file once): [{src, alt, langs, count, heading, line,
+        web, path, included}], in the order they first appear."""
+        from . import importer
+        found = {}
+        for lang in self.languages():
+            try:
+                text = self.source_text(lang, filtered=False)
+            except FileNotFoundError:
+                continue
+            for it in importer.list_images(text):
+                m = found.setdefault(it["src"], {"src": it["src"], "alt": it["alt"], "langs": [], "count": 0,
+                                                 "heading": it["heading"], "line": it["line"]})
+                m["count"] += 1
+                if lang not in m["langs"]:
+                    m["langs"].append(lang)
+        for m in found.values():
+            m["web"] = bool(re.match(r"^(https?|file|data):", m["src"]))
+            m["path"] = self.resolve_media(m["src"], m["langs"][0])
+            m["included"] = self.media_included(m["src"])
+        return list(found.values())
+
+    def set_media_excluded(self, srcs):
+        self.config["media_exclude"] = sorted(set(srcs))
 
     def slots(self, doc=None, lang=None):
         """Image slots. Cover, background, chapter and section images belong to the main-language

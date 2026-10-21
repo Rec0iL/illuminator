@@ -105,13 +105,21 @@ def list_images(md):
     return found
 
 
-def strip_images(md, indexes=None):
-    """Remove image references (`indexes` = positions from list_images, None = all).
-    Lines that held only an image disappear completely. Returns (markdown, removed count)."""
+def strip_images(md, indexes=None, predicate=None):
+    """Remove image references: those at `indexes` (positions from list_images), else those whose source
+    `predicate(src)` says so, else all. Lines that held only an image disappear completely.
+    Returns (markdown, removed count)."""
     removed = [0]
 
     def drop(i, m, at):
-        if indexes is not None and i not in indexes:
+        src = m.group("src2") or m.group("src") or m.group("src3")
+        if indexes is not None:
+            remove = i in indexes
+        elif predicate is not None:
+            remove = predicate(src)
+        else:
+            remove = True
+        if not remove:
             return m.group(0)
         removed[0] += 1
         return REMOVED

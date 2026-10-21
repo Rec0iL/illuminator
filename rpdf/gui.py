@@ -420,6 +420,52 @@ class StripImagesDialog(QDialog):
         self.accept()
 
 
+class MediaDialog(QDialog):
+    """Which images of the source texts go into the PDF (the Markdown files are not changed)."""
+
+    def __init__(self, parent, media):
+        super().__init__(parent)
+        self.setWindowTitle("Bilder aus dem Dokument")
+        self.media = media
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel(f"{len(media)} Bild(er) in den Quelltexten. Ein Haken heißt: kommt ins PDF. Ohne Haken "
+                           "wird das Bild überall ausgelassen, wo es im Text steht; das Markdown bleibt unverändert."))
+        self.list = QListWidget()
+        self.list.setIconSize(QSize(72, 44))
+        for m in media:
+            where = " (Web)" if m["web"] else ("" if m["path"] else " – Datei fehlt")
+            item = QListWidgetItem(f"{m['src']}{where}\n{', '.join(m['langs'])} · {m['count']}× · "
+                                   f"{m['heading'] or '(vor der ersten Überschrift)'}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if m["included"] else Qt.Unchecked)
+            item.setToolTip(str(m["path"] or m["src"]))
+            if m["path"]:
+                pm = QPixmap(str(m["path"]))
+                if not pm.isNull():
+                    item.setIcon(QIcon(pm.scaled(72, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+            elif not m["web"]:
+                item.setForeground(QColor("#e06060"))
+            self.list.addItem(item)
+        v.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        for text, state in (("Alle ins PDF", Qt.Checked), ("Alle auslassen", Qt.Unchecked)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, st=state: [self.list.item(i).setCheckState(st)
+                                                         for i in range(self.list.count())])
+            row.addWidget(b)
+        row.addStretch(1)
+        v.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+        self.resize(680, 480)
+
+    def excluded(self):
+        return [self.media[i]["src"] for i in range(self.list.count())
+                if self.list.item(i).checkState() != Qt.Checked]
+
+
 # ---------------------------------------------------------------- main window
 class MainWindow(QMainWindow):
     def __init__(self, project_dir=None):
@@ -662,6 +708,21 @@ class MainWindow(QMainWindow):
         f.addRow("Sprache", self.cb_lang)
         f.addRow("Überschriften", self.cb_level)
         f.addRow("", self.chk_section_images)
+        self.chk_doc_images = QCheckBox("Bilder aus dem Dokument ins PDF")
+        self.chk_doc_images.setToolTip("Bilder, die im Quelltext stehen (Screenshots, Grafiken, Bilder aus einem "
+                                       "PDF-/Word-Import, Badges). Ohne Haken bleiben alle draußen; einzelne wählt "
+                                       "man unter „Medien auswählen…“. Das Markdown bleibt dabei unverändert.")
+        self.btn_media = QPushButton("Medien auswählen…")
+        self.btn_media.clicked.connect(self.choose_media)
+        self.lb_media = QLabel()
+        self.lb_media.setObjectName("dim")
+        mrow = QWidget()
+        mh = QHBoxLayout(mrow)
+        mh.setContentsMargins(0, 0, 0, 0)
+        mh.addWidget(self.btn_media)
+        mh.addWidget(self.lb_media, 1)
+        f.addRow("", self.chk_doc_images)
+        f.addRow("", mrow)
         f.addRow("", self.chk_texture)
         self.sl_bgdim = QSlider(Qt.Horizontal)
         self.sl_bgdim.setRange(-background.ADJUST_RANGE, background.ADJUST_RANGE)
@@ -1231,6 +1292,8 @@ class MainWindow(QMainWindow):
         lay = c["layout"]
         self.chk_section_images.setChecked(lay.get("section_images", True))
         self.chk_texture.setChecked(lay.get("page_texture", True))
+        self.chk_doc_images.setChecked(lay.get("document_images", True))
+        self._update_media_label()
         self.sl_bgdim.setValue(int(lay.get("bg_dim_adjust", 0)))
         self.chk_justify.setChecked(lay.get("justify", True))
         self.sp_font.setValue(lay.get("font_size_pt", 9.6))
@@ -1304,6 +1367,7 @@ class MainWindow(QMainWindow):
         c["summary"] = self.ed_summary.toPlainText().strip()
         c["layout"].update(section_images=self.chk_section_images.isChecked(),
                            page_texture=self.chk_texture.isChecked(), bg_dim_adjust=self.sl_bgdim.value(),
+                           document_images=self.chk_doc_images.isChecked(),
                            justify=self.chk_justify.isChecked(), font_size_pt=round(self.sp_font.value(), 2),
                            fill_gaps=self.chk_fill.isChecked(), filler_min_mm=self.sp_fill.value())
         c.setdefault("qc", {}).update(enabled=self.chk_qc.isChecked(), auto_fix=self.chk_qc_fix.isChecked(),
@@ -1347,6 +1411,31 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Gespeichert.", 3000)
             self._fill_langs(select=self._lang_shown)
             self._reload_slots()
+
+    def _update_media_label(self):
+        try:
+            media = self.project.media() if self.project else []
+        except Exception:  # noqa: BLE001 - the label is only a hint
+            media = []
+        left_out = sum(1 for m in media if not m["included"])
+        self.lb_media.setText(f"{len(media)} Bild(er) im Text" + (f", {left_out} ausgelassen" if left_out else ""))
+
+    def choose_media(self):
+        if not self.project:
+            return
+        self._collect()
+        media = self.project.media()
+        if not media:
+            QMessageBox.information(self, "Medien", "In den Quelltexten stehen keine Bilder.")
+            return
+        dlg = MediaDialog(self, media)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.project.set_media_excluded(dlg.excluded())
+        self.project.save()
+        self._update_media_label()
+        self._reload_slots()
+        self._log(f"Medien: {len(dlg.excluded())} von {len(media)} Bild(ern) bleiben aus dem PDF.")
 
     def _update_bg_preview(self):
         """Dimmed page background with sample text, as it comes out for the slider position and colors."""

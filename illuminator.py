@@ -17,6 +17,8 @@
   python3 illuminator.py remove-lang PROJEKT --lang xx
   python3 illuminator.py strip-images PROJEKT --lang xx [--list] [--only 0,3,4]
                                                       Bild-Verweise aus einer Übersetzung entfernen (alle oder ausgewählte)
+  python3 illuminator.py media PROJEKT [--list] [--exclude 0,3] [--include 3] [--off|--on]
+                                                      Bilder aus den Quelltexten im PDF auslassen/aufnehmen (Quelle bleibt unverändert)
   python3 illuminator.py summary PROJEKT [--force]   Kurzfassung des Buchs für die LLM-Funktionen (neu) schreiben
 """
 import argparse
@@ -29,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["gui", "new", "plan", "images", "check", "edit", "build", "all", "detect", "restructure",
-                                          "add-lang", "remove-lang", "strip-images", "summary"])
+                                          "add-lang", "remove-lang", "strip-images", "summary", "media"])
     ap.add_argument("project", nargs="?")
     ap.add_argument("source", nargs="?")
     ap.add_argument("instruction", nargs="?", help="edit: was am Bild geändert werden soll")
@@ -44,6 +46,11 @@ def main():
     ap.add_argument("--lang", help="Sprachcode (add-lang, remove-lang, strip-images; build: nur diese Sprache)")
     ap.add_argument("--keep-images", action="store_true", help="add-lang: Bilder des Dokuments übernehmen")
     ap.add_argument("--list", action="store_true", help="strip-images: Bild-Verweise nur auflisten")
+    ap.add_argument("--no-images", action="store_true", help="new: Bilder des Dokuments (docx, pdf) nicht übernehmen")
+    ap.add_argument("--exclude", help="media: diese Nummern (aus --list) aus dem PDF auslassen, kommagetrennt")
+    ap.add_argument("--include", help="media: diese Nummern wieder aufnehmen")
+    ap.add_argument("--off", action="store_true", help="media: alle Bilder aus den Quelltexten auslassen")
+    ap.add_argument("--on", action="store_true", help="media: Bilder aus den Quelltexten aufnehmen (Standard)")
     ap.add_argument("--only", help="strip-images: nur diese Nummern (aus --list), kommagetrennt")
     ap.add_argument("--strictness", type=int, choices=[1, 2, 3],
                     help="check: Strenge der Bildkontrolle, 3 = streng (Motiv wie im Prompt), 2 = mittel, "
@@ -76,7 +83,8 @@ def run_command(args, ap, ctx):
         root.mkdir(parents=True, exist_ok=True)
         src = Path(args.source)
         if src.suffix.lower() not in (".md", ".markdown"):
-            src = importer.to_markdown(src, root / (src.stem + ".md"), ctx, proj.DEFAULTS["agy"]["model"], args.type)
+            src = importer.to_markdown(src, root / (src.stem + ".md"), ctx, proj.DEFAULTS["agy"]["model"], args.type,
+                                       keep_images=not args.no_images)
         p = proj.create(root, src, content_type=args.type)
         print(f"Projekt angelegt: {p.root} ({len(p.manifest)} Bild-Plätze)")
         return
@@ -88,6 +96,8 @@ def run_command(args, ap, ctx):
         return restructure(p, args.source, ctx)
     if args.command in ("add-lang", "remove-lang", "strip-images", "summary"):
         return language_command(args, ap, p, ctx)
+    if args.command == "media":
+        return media_command(args, p)
     if args.command in ("plan", "all"):
         pipeline.plan(p, ctx, force=args.force)
     if args.command in ("images", "all"):
@@ -107,6 +117,30 @@ def run_command(args, ap, ctx):
         from rpdf import layout
         for lang in [args.lang] if args.lang else p.build_languages():
             layout.detect_fillers(p, None, ctx.log, lang)
+
+
+def media_command(args, p):
+    """List the images of the source texts and switch them on or off for the PDF (the files are not touched)."""
+    items = p.media()
+    numbers = lambda text: {int(x) for x in text.split(",") if x.strip()}
+    if args.off or args.on:
+        p.config["layout"]["document_images"] = not args.off
+    excluded = set(p.config.get("media_exclude", []))
+    for text, leave_out in ((args.exclude, True), (args.include, False)):
+        for n in numbers(text) if text else ():
+            if not 0 <= n < len(items):
+                sys.exit(f"Fehler: Nummer {n} gibt es nicht (0–{len(items) - 1}).")
+            (excluded.add if leave_out else excluded.discard)(items[n]["src"])
+    p.set_media_excluded(excluded)
+    p.save()
+    items = p.media()
+    print("Bilder aus dem Dokument: " + ("an" if p.config["layout"].get("document_images", True) else "AUS (alle ausgelassen)"))
+    for n, m in enumerate(items):
+        state = "im PDF" if m["included"] else "ausgelassen"
+        where = "Web" if m["web"] else ("vorhanden" if m["path"] else "Datei fehlt")
+        print(f"{n:>3}  {state:<11} {m['src']}  ({where}; {', '.join(m['langs'])}; {m['count']}x; [{m['heading']}])")
+    if not items:
+        print("Keine Bilder in den Quelltexten.")
 
 
 def language_command(args, ap, p, ctx):
