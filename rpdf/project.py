@@ -29,6 +29,7 @@ DEFAULTS = {
     "layout": {
         "section_images": True,
         "page_texture": True,
+        "bg_dim_adjust": 0,        # page background: -100 darker … +100 brighter than the calculated optimum
         "justify": True,
         "font_size_pt": 9.6,
         "fill_gaps": False,        # fill large empty space after short blocks with extra images

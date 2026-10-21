@@ -172,6 +172,9 @@ def _luminance(rgb):
     return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
+luminance = _luminance
+
+
 def contrast(a, b):
     """WCAG contrast ratio of two (r, g, b) colors."""
     la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)

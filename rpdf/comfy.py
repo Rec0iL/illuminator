@@ -6,7 +6,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 
 WORKFLOWS = {
     "anima": "Diffusion-Modell (UNET + CLIP + VAE, z.B. Anima)",
@@ -186,11 +186,6 @@ class Comfy:
 
 
 def save_image(img, path, kind):
-    """Store as JPEG; the page background is darkened so text stays readable."""
-    if kind == "background":
-        img = ImageEnhance.Color(img).enhance(0.35)
-        img = ImageEnhance.Brightness(img).enhance(0.28)
-        img = ImageEnhance.Contrast(img).enhance(0.85)
-        img = img.filter(ImageFilter.GaussianBlur(1.2))
+    """Store as JPEG, unchanged. (The page background is dimmed when the PDF is built, see background.py.)"""
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path, "JPEG", quality=86, optimize=True)

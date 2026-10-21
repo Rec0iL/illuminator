@@ -368,6 +368,7 @@ def edit_image(project, key, instruction, ctx):
     img = with_quota_wait(project, ctx, lambda: client.generate(
         req, cancelled=ctx.cancelled, previous_id=prev, image_path=None if prev else project.image_path(key)))
     comfy.save_image(img, project.image_path(key), slot.kind)
+    e["raw"] = True      # stored as the engine made it (the page background is dimmed at build time)
     _remember_interaction(e, client)
     project.reset_review(key)
     project.save_manifest()
@@ -396,6 +397,7 @@ def _generate(project, client, cfg, slot, ctx):
     wf = type(client).build_workflow(cfg, project.full_prompt(slot.key), project.negative(slot.key), w, h, e["seed"])
     img = with_quota_wait(project, ctx, lambda: client.generate(wf, cancelled=ctx.cancelled))
     comfy.save_image(img, project.image_path(slot.key), slot.kind)
+    e["raw"] = True
     _remember_interaction(e, client)
     project.reset_review(slot.key)
     project.save_manifest()

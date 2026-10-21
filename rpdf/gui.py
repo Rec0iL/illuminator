@@ -6,8 +6,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThread, QUrl, Signal
-from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette,
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPainterPath, QPalette,
                            QPen, QPixmap)
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
@@ -18,11 +18,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import comfy, importer, models, pipeline, planner, styles
+from . import background, comfy, importer, models, pipeline, planner, styles
 from .project import (AI_FLAG, AI_OK, APPROVED, DEFAULTS, LANG_NAMES, NEEDS_REDO, REJECTED, TEXT_KEYS, Project,
                       clean_lang, create, lang_label)
 
 TW, TH = 190, 84   # thumbnail size
+BG_PREVIEW = (170, 240)   # preview of the dimmed page background
 RECENT_MAX = 10
 KIND_LABEL = {"cover": "Cover", "background": "Hintergrund", "chapter": "Kapitel", "section": "Abschnitt",
               "filler": "Füllbild"}
@@ -73,6 +74,8 @@ class Job(QThread):
 
 # ---------------------------------------------------------------- small widgets
 class ColorButton(QPushButton):
+    changed = Signal()
+
     def __init__(self):
         super().__init__()
         self.setFixedWidth(90)
@@ -84,6 +87,7 @@ class ColorButton(QPushButton):
         light = QColor(hex_color).lightness() > 128
         self.setText(hex_color)
         self.setStyleSheet(f"background:{hex_color}; color:{'#000' if light else '#fff'}; border-radius:4px;")
+        self.changed.emit()
 
     def _pick(self):
         c = QColorDialog.getColor(QColor(self.color), self, "Farbe wählen")
@@ -651,6 +655,31 @@ class MainWindow(QMainWindow):
         f.addRow("Überschriften", self.cb_level)
         f.addRow("", self.chk_section_images)
         f.addRow("", self.chk_texture)
+        self.sl_bgdim = QSlider(Qt.Horizontal)
+        self.sl_bgdim.setRange(-background.ADJUST_RANGE, background.ADJUST_RANGE)
+        self.sl_bgdim.setTickPosition(QSlider.TicksBelow)
+        self.sl_bgdim.setTickInterval(50)
+        self.sl_bgdim.setPageStep(10)
+        self.sl_bgdim.setToolTip(
+            "Das Programm berechnet aus dem Hintergrundbild und den Textfarben, wie stark es abgedunkelt werden muss, "
+            "damit Text und Überschriften gut lesbar bleiben (Mitte = dieses Optimum). Nach links wird es dunkler, "
+            "nach rechts heller und sichtbarer; alle 50 Schritte verdoppelt oder halbiert sich die Helligkeit.")
+        f.addRow("Hintergrund-Helligkeit", self.sl_bgdim)
+        self.lb_bgdim = QLabel()
+        self.lb_bgdim.setWordWrap(True)
+        self.lb_bgdim.setObjectName("dim")
+        self.lb_bgdim.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        f.addRow(self.lb_bgdim)
+        self.lb_bgpreview = QLabel()
+        self.lb_bgpreview.setFixedSize(*BG_PREVIEW)
+        self.lb_bgpreview.setAlignment(Qt.AlignCenter)
+        self.lb_bgpreview.setObjectName("preview")
+        f.addRow("", self.lb_bgpreview)
+        self._bg_timer = QTimer(self)
+        self._bg_timer.setSingleShot(True)
+        self._bg_timer.setInterval(120)
+        self._bg_timer.timeout.connect(self._update_bg_preview)
+        self.sl_bgdim.valueChanged.connect(lambda _: self._bg_timer.start())
         f.addRow("", self.chk_justify)
         f.addRow("Schriftgröße", self.sp_font)
         self.chk_fill = QCheckBox("Leerraum mit Füllbildern füllen")
@@ -667,6 +696,8 @@ class MainWindow(QMainWindow):
         f.addRow("Text", self.col_ink)
         f.addRow("Akzent (Überschriften)", self.col_accent)
         f.addRow("Akzent 2 (Kapitel, Initialen)", self.col_accent2)
+        for button in (self.col_ink, self.col_accent):
+            button.changed.connect(self._bg_timer.start)      # the optimum depends on the text colors
         self.btn_palettes = QPushButton("4 Farbpaletten vorschlagen (KI)")
         self.btn_palettes.setToolTip("Die KI schlägt vier Farbpaletten vor, die zum Thema des Regelwerks passen. "
                                      "Du suchst dir eine aus, sie ersetzt die vier Farben oben.")
@@ -1156,6 +1187,7 @@ class MainWindow(QMainWindow):
         lay = c["layout"]
         self.chk_section_images.setChecked(lay.get("section_images", True))
         self.chk_texture.setChecked(lay.get("page_texture", True))
+        self.sl_bgdim.setValue(int(lay.get("bg_dim_adjust", 0)))
         self.chk_justify.setChecked(lay.get("justify", True))
         self.sp_font.setValue(lay.get("font_size_pt", 9.6))
         self.chk_fill.setChecked(lay.get("fill_gaps", False))
@@ -1226,7 +1258,7 @@ class MainWindow(QMainWindow):
         c["chapter_level"] = self.cb_level.currentIndex()
         c["summary"] = self.ed_summary.toPlainText().strip()
         c["layout"].update(section_images=self.chk_section_images.isChecked(),
-                           page_texture=self.chk_texture.isChecked(),
+                           page_texture=self.chk_texture.isChecked(), bg_dim_adjust=self.sl_bgdim.value(),
                            justify=self.chk_justify.isChecked(), font_size_pt=round(self.sp_font.value(), 2),
                            fill_gaps=self.chk_fill.isChecked(), filler_min_mm=self.sp_fill.value())
         c.setdefault("qc", {}).update(enabled=self.chk_qc.isChecked(), auto_fix=self.chk_qc_fix.isChecked(),
@@ -1269,6 +1301,48 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Gespeichert.", 3000)
             self._fill_langs(select=self._lang_shown)
             self._reload_slots()
+
+    def _update_bg_preview(self):
+        """Dimmed page background with sample text, as it comes out for the slider position and colors."""
+        if not self.project:
+            return
+        adjust = self.sl_bgdim.value()
+        theme = {k: b.color for k, b in (("bg", self.col_bg), ("ink", self.col_ink),
+                                         ("accent", self.col_accent), ("accent2", self.col_accent2))}
+        try:
+            result = background.preview(self.project, adjust, theme)
+        except Exception as e:  # noqa: BLE001 - a broken file must not break the form
+            self.lb_bgpreview.clear()
+            self.lb_bgdim.setText(f"Vorschau nicht möglich: {e}")
+            return
+        self.sl_bgdim.setEnabled(result is not None)
+        if result is None:
+            self.lb_bgpreview.clear()
+            self.lb_bgdim.setText("Noch kein Hintergrundbild." if not self.project.has_image("background") else
+                                  "Dieses Hintergrundbild wurde noch abgedunkelt gespeichert, der Regler wirkt erst "
+                                  "bei einem neu erzeugten Bild („Bild entfernen“, dann „Fehlende Bilder“).")
+            return
+        img, info = result
+        qimg = QImage(img.tobytes(), img.width, img.height, 3 * img.width, QImage.Format_RGB888).copy()
+        pm = QPixmap.fromImage(qimg).scaled(*BG_PREVIEW, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        p = QPainter(pm)
+        heading = QFont()
+        heading.setPointSize(9)
+        heading.setBold(True)
+        p.setFont(heading)
+        p.setPen(QColor(theme["accent"]))
+        p.drawText(10, 30, "ÜBERSCHRIFT")
+        body = QFont()
+        body.setPointSize(7)
+        p.setFont(body)
+        p.setPen(QColor(theme["ink"]))
+        for i, line in enumerate(("Beispieltext, wie er auf der", "Seite über dem Hintergrund steht.",
+                                  "Gut lesbar? Dann passt es.")):
+            p.drawText(10, 50 + i * 14, line)
+        p.end()
+        self.lb_bgpreview.setPixmap(pm)
+        self.lb_bgdim.setText(f"Berechnetes Optimum: Helligkeit {info['optimal']:.2f}. Jetzt: {info['brightness']:.2f}"
+                              + (" (Optimum)." if adjust == 0 else f" ({adjust:+d})."))
 
     def _view_slots(self):
         """Slots of the list: the shared topic slots plus the fillers of the language shown."""
@@ -1357,6 +1431,7 @@ class MainWindow(QMainWindow):
         if self.slots:
             self.slot_list.setCurrentRow(min(max(row, 0), len(self.slots) - 1))
             self._show_slot(self.slot_list.currentRow())
+        self._bg_timer.start()
         n_img = sum(self.project.has_image(s.key) for s in self.slots)
         self.statusBar().showMessage(f"{len(self.slots)} Bildplätze · {n_img} Bilder vorhanden")
         self._update_rejected_count()
@@ -1401,7 +1476,9 @@ class MainWindow(QMainWindow):
             return
         self._shown_key = s.key
         e = self.project.entry(s.key)
-        self.slot_title.setText(f"<b>{s.title}</b>  <span style='color:#888'>{KIND_LABEL[s.kind]} · {s.key}</span>")
+        note = (" · Original, im PDF abgedunkelt (Buch → Hintergrund-Helligkeit)"
+                if s.kind == "background" and background.is_raw(self.project) else "")
+        self.slot_title.setText(f"<b>{s.title}</b>  <span style='color:#888'>{KIND_LABEL[s.kind]} · {s.key}{note}</span>")
         self.slot_prompt.setPlainText(e.get("prompt", ""))
         self.chk_include_style.setChecked(e.get("include_style", True))
         self.sp_seed.setValue(int(e.get("seed", 1)))
@@ -1820,6 +1897,7 @@ class MainWindow(QMainWindow):
             return
         self._collect()
         shutil.copy(self.preview_path, self.project.image_path(s.key))
+        self.project.entry(s.key)["raw"] = True
         self.project.reset_review(s.key)
         self.project.save()
         self._log(f"Übernommen: {s.title}")

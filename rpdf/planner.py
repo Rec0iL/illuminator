@@ -472,6 +472,16 @@ def _run_on_image(image_path, work_dir, prompt, schema, model=None):
     return result
 
 
+BACKGROUND_NOTE = ("This image is the texture behind the text of every page. The PDF dims and desaturates it "
+                   "automatically, so NEVER judge or mention brightness, darkness, dimness, saturation or low "
+                   "contrast. Judge only: no readable text, letters or logos, no strong focal subject or "
+                   "high-contrast shapes that would fight with the text, and that it suits the book's mood.")
+
+
+def background_note(slot):
+    return BACKGROUND_NOTE if slot.kind == "background" else ""
+
+
 IMAGE_FORMAT_NOTE = ("Do NOT judge or mention image size, aspect ratio or orientation (portrait/landscape) - "
                      "the tool sets the format on purpose.")
 
@@ -516,6 +526,7 @@ def check_image(image_path, work_dir, slot, prompt_used, world, model=None, styl
 {pr['world_label']}: {world or 'unknown'}
 {style_for_judging(style)}
 {wish_for_judging()}
+{background_note(slot)}
 Section: "{slot.title}"
 Section text (excerpt):
 {slot.context_md[:1500]}
@@ -540,6 +551,7 @@ def analyse_image(image_path, work_dir, slot, prompt_used, negative_used, world,
 {pr['world_label']}: {world or 'unknown'}
 {style_for_judging(style)}
 {wish_for_judging()}
+{background_note(slot)}
 Section: "{slot.title}"
 Section text (excerpt):
 {slot.context_md[:1500]}

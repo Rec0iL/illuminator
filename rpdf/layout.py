@@ -12,6 +12,7 @@ from string import Template
 
 import markdown
 
+from . import background
 from .project import filler_title
 
 PKG = Path(__file__).parent
@@ -234,7 +235,7 @@ def find_gaps(document, min_gap_mm):
     return gaps
 
 
-def build_html(project, doc, fillers=None, lang=None):
+def build_html(project, doc, fillers=None, lang=None, log=None):
     """HTML of one language. Topic images are shared by all languages (the translation's blocks carry
     the same keys); filler images are looked up per language."""
     cfg = project.settings_for(lang)
@@ -248,8 +249,9 @@ def build_html(project, doc, fillers=None, lang=None):
     running = cfg.get("running_title") or (cfg.get("title") or doc.title or "").split(":")[0]
 
     parts = []
-    if lay.get("page_texture") and img("background"):
-        parts.append(f'<div class="pagebg" style="background-image:url(\'{img("background")}\')"></div>')
+    page_bg = background.page_image(project, log) if lay.get("page_texture") else None
+    if page_bg:
+        parts.append(f'<div class="pagebg" style="background-image:url(\'{page_bg}\')"></div>')
 
     # cover
     cover_img = img("cover")
@@ -399,7 +401,7 @@ def render(project, doc=None, log=print, lang=None):
                    and project.has_image(k)}
         log(f"Füllbilder eingesetzt: {len(fillers)}")
     html_path = project.build_dir / _build_name("index", tag)
-    html = build_html(project, doc, fillers, tag)
+    html = build_html(project, doc, fillers, tag, log)
     html_path.write_text(html, encoding="utf-8")
     for uri in sorted(set(re.findall(r'<img [^>]*src="(file://[^"]+)"', html))):
         path = Path(urllib.parse.unquote(urllib.parse.urlparse(uri).path))
