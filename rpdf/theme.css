@@ -7,16 +7,21 @@
   --magenta:${accent2};
   --accent-soft:${accent_soft};
   --accent-line:${accent_line};
-  --card:rgba(16,18,24,0.88);
-  --rule:rgba(255,255,255,0.10);
+  --card:${card};
+  --rule:${rule};
+  --stripe:${stripe};
+  --strong:${strong};
+  --em:${em};
+  --scrim0:${scrim0};
+  --scrim72:${scrim72};
 }
 *{ box-sizing:border-box; }
 html, body{ margin:0; padding:0; color:var(--ink); }
 body{ font-family:'Barlow', 'Noto Emoji', sans-serif; font-size:${font_size}pt; line-height:1.45;
       text-align:${text_align}; hyphens:auto; hyphenate-character:"-"; orphans:3; widows:3; }
 p{ margin:0 0 .6em 0; }
-strong{ color:#fff; font-weight:600; }
-em{ color:#d7dce4; }
+strong{ color:var(--strong); font-weight:600; }
+em{ color:var(--em); }
 
 /* ---------- pages ---------- */
 @page{
@@ -45,12 +50,12 @@ em{ color:#d7dce4; }
 .cover-img{ position:absolute; top:0; left:0; width:210mm; height:297mm;
             background-position:center top; background-size:100% auto; background-repeat:no-repeat; }
 .cover-scrim{ position:absolute; top:0; left:0; width:210mm; height:297mm;
-              background:linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,.72) 72%, var(--bg) 92%); }
+              background:linear-gradient(180deg, var(--scrim0) 45%, var(--scrim72) 72%, var(--bg) 92%); }
 .cover-text{ position:absolute; left:0; right:0; bottom:20mm; text-align:center; padding:0 14mm; }
 .cover-kicker{ font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700; letter-spacing:.45em;
                font-size:10pt; color:var(--cyan); margin-bottom:4mm; }
 .cover-title{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:${cover_title_size}pt; line-height:.85;
-              letter-spacing:.06em; margin:0; color:#fff; text-shadow:3px 3px 0 var(--magenta); }
+              letter-spacing:.06em; margin:0; color:var(--strong); text-shadow:3px 3px 0 var(--magenta); }
 .cover-sub{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-size:16pt; font-weight:500; letter-spacing:.18em;
             color:var(--cyan); margin-top:3mm; text-transform:uppercase; }
 .cover-meta{ font-size:9.5pt; color:var(--ink-dim); margin-top:5mm; text-align:center; }
@@ -65,14 +70,14 @@ em{ color:#d7dce4; }
          string-set: runhead "", chaptitle ""; }
 .opener img{ width:100%; height:auto; display:block; }
 .opener-scrim{ position:absolute; top:0; left:0; right:0; bottom:0;
-               background:linear-gradient(180deg, rgba(0,0,0,0) 35%, var(--bg) 100%); opacity:.92; }
+               background:linear-gradient(180deg, var(--scrim0) 35%, var(--bg) 100%); opacity:.92; }
 .opener-label{ position:absolute; left:17mm; right:17mm; bottom:6mm; }
 .opener.plain{ height:auto; margin:-4mm 0 8mm 0; overflow:visible; }
 .opener.plain .opener-label{ position:static; border-bottom:2px solid var(--magenta); padding-bottom:3mm; }
 .chapter-num{ font-family:'Barlow Condensed', 'Noto Emoji', sans-serif; font-weight:700; font-size:9pt;
               letter-spacing:.35em; text-transform:uppercase; color:var(--magenta); margin-bottom:1mm; }
 .opener h2{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:44pt; line-height:.95;
-            letter-spacing:.03em; color:#fff; margin:0; text-align:left; }
+            letter-spacing:.03em; color:var(--strong); margin:0; text-align:left; }
 .chapter-sub{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:500; font-size:11pt; letter-spacing:.12em;
               text-transform:uppercase; color:var(--cyan); margin-top:1.5mm; }
 .runhead-anchor{ height:0; }
@@ -134,7 +139,7 @@ table.rules-table{ width:100%; border-collapse:collapse; background:var(--card);
 table.rules-table th, table.rules-table td{ padding:1.4mm 2mm; border-bottom:1px solid var(--rule); vertical-align:top; }
 table.rules-table th{ background:var(--accent-soft); color:var(--cyan); font-family:'Oswald', 'Noto Emoji', sans-serif;
                       font-weight:500; letter-spacing:.05em; text-transform:uppercase; font-size:7.6pt; }
-table.rules-table tr:nth-child(even) td{ background:rgba(255,255,255,.025); }
+table.rules-table tr:nth-child(even) td{ background:var(--stripe); }
 table.rules-table tr{ break-inside:avoid; }
 /* inline images from the Markdown (e.g. a centred hero screenshot) stay inside the text area */
 p > img{ display:block; max-width:100%; height:auto; margin:2mm auto; }
@@ -152,7 +157,7 @@ table.rules-table td img{ display:block; max-width:100%; height:auto; margin:0 a
 /* ---------- appendix ---------- */
 .appendix + .appendix{ break-before:auto; margin-top:10mm; }
 .appendix h2{ font-family:'Bebas Neue', 'Noto Emoji', sans-serif; font-weight:400; font-size:30pt; letter-spacing:.03em;
-              color:#fff; border-bottom:2px solid var(--magenta); padding-bottom:2mm; margin:0 0 5mm 0;
+              color:var(--strong); border-bottom:2px solid var(--magenta); padding-bottom:2mm; margin:0 0 5mm 0;
               text-align:left; break-after:avoid; }
 .appendix + .appendix h2{ font-size:22pt; border-bottom-width:1px; }
 .appendix-body h3{ font-family:'Oswald', 'Noto Emoji', sans-serif; font-weight:600; font-size:12pt; letter-spacing:.04em;

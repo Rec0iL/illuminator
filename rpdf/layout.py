@@ -331,6 +331,7 @@ def build_html(project, doc, fillers=None, lang=None, log=None):
         accent_soft=_hex_rgba(theme["accent"], .10), accent_line=_hex_rgba(theme["accent"], .35),
         font_size=lay.get("font_size_pt", 9.6), lead_size=round(lay.get("font_size_pt", 9.6) * 1.08, 2),
         text_align="justify" if lay.get("justify", True) else "left",
+        **background.page_colors(project, bool(page_bg)),
         filler_gap=FILLER_SPACING_MM - 3,
         cover_title_size=118 if len(title) <= 10 else max(48, int(118 * 10 / len(title))))
 

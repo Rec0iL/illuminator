@@ -168,6 +168,31 @@ def page_image(project, log=None):
     return target.as_uri()
 
 
+def _rgba(rgb, alpha):
+    return "rgba(%d,%d,%d,%s)" % (*(round(c) for c in rgb), alpha)
+
+
+def page_colors(project, textured):
+    """Surface colors that sit on the page, as CSS values: table and code cards, rules, stripes, the color of
+    bold text and titles, and the tint the banner and cover fades use. The cards follow the page picture
+    (so they follow the brightness slider too), but always keep 7.5:1 contrast to the text color; with dark text
+    on a light page they are light, with light text dark."""
+    theme = project.config["theme"]
+    bg = styles.parse_hex(theme["bg"]) or (11, 12, 16)
+    ink = styles.parse_hex(theme["ink"]) or (230, 234, 240)
+    base = bg
+    target = project.build_dir / "background-page.jpg"
+    if textured and target.exists():
+        with Image.open(target) as im:
+            avg = im.convert("RGB").resize((1, 1), Image.BOX).getpixel((0, 0))
+        base = tuple((a + b) / 2 for a, b in zip(avg, bg))
+    card = styles.ensure_contrast_with(base, ink, 7.5)
+    light = page_is_light(theme)
+    return {"card": _rgba(card, 0.88), "rule": _rgba(ink, 0.14), "stripe": _rgba(ink, 0.05),
+            "strong": "#000000" if light else "#ffffff", "em": theme["ink"] if light else "#d7dce4",
+            "scrim0": _rgba(bg, 0), "scrim72": _rgba(bg, 0.72)}
+
+
 def preview(project, adjust, theme=None, width=170):
     """Small picture for the slider's preview and the values used (see dim); None if there is no background."""
     if not project.has_image("background"):

@@ -194,6 +194,18 @@ def ensure_contrast(color, bg, minimum):
 MAX_BG_LIGHTNESS = 0.06      # relative luminance: the layout (white headings, dark scrims) needs a dark page
 
 
+def ensure_contrast_with(color, ink, minimum):
+    """Move `color` (a surface the text `ink` is printed on) away from the ink's brightness, in small steps,
+    until the contrast is at least `minimum`: darker for light ink, lighter for dark ink."""
+    target = (0, 0, 0) if _luminance(ink) > 0.18 else (255, 255, 255)
+    rgb = color
+    for _ in range(40):
+        if contrast(rgb, ink) >= minimum:
+            break
+        rgb = tuple(c + (t - c) * 0.06 for c, t in zip(rgb, target))
+    return rgb
+
+
 def fit_palette(palette, fallback):
     """Take a proposed palette {bg, ink, accent, accent2}, repair what cannot work on a dark page
     (not a hex color, too light a background, too little contrast) and fill gaps from `fallback`."""
