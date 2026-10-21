@@ -824,7 +824,7 @@ class MainWindow(QMainWindow):
         f.addRow("Text", self.col_ink)
         f.addRow("Akzent (Überschriften)", self.col_accent)
         f.addRow("Akzent 2 (Kapitel, Initialen)", self.col_accent2)
-        for button in (self.col_ink, self.col_accent):
+        for button in (self.col_bg, self.col_ink, self.col_accent):
             button.changed.connect(self._bg_timer.start)      # the optimum depends on the text colors
         self.btn_palettes = QPushButton("4 Farbpaletten vorschlagen (KI)")
         self.btn_palettes.setToolTip("Die KI schlägt vier Farbpaletten vor, die zum Thema des Regelwerks passen. "
@@ -1512,9 +1512,7 @@ class MainWindow(QMainWindow):
         self.sl_bgdim.setEnabled(result is not None)
         if result is None:
             self.lb_bgpreview.clear()
-            self.lb_bgdim.setText("Noch kein Hintergrundbild." if not self.project.has_image("background") else
-                                  "Dieses Hintergrundbild wurde noch abgedunkelt gespeichert, der Regler wirkt erst "
-                                  "bei einem neu erzeugten Bild („Bild entfernen“, dann „Fehlende Bilder“).")
+            self.lb_bgdim.setText("Noch kein Hintergrundbild.")
             return
         img, info = result
         qimg = QImage(img.tobytes(), img.width, img.height, 3 * img.width, QImage.Format_RGB888).copy()
@@ -1535,8 +1533,16 @@ class MainWindow(QMainWindow):
             p.drawText(10, 50 + i * 14, line)
         p.end()
         self.lb_bgpreview.setPixmap(pm)
-        self.lb_bgdim.setText(f"Berechnetes Optimum: Helligkeit {info['optimal']:.2f}. Jetzt: {info['brightness']:.2f}"
-                              + (" (Optimum)." if adjust == 0 else f" ({adjust:+d})."))
+        if info["mode"] == "light":
+            text = (f"Helle Seite (dunkle Schrift): das Bild wird aufgehellt. Berechnetes Optimum {info['optimal']:.0%}, "
+                    f"jetzt {info['brightness']:.0%}")
+        else:
+            text = f"Berechnetes Optimum: Helligkeit {info['optimal']:.2f}. Jetzt: {info['brightness']:.2f}"
+        text += " (Optimum)." if adjust == 0 else f" ({adjust:+d})."
+        if not background.is_raw(self.project):
+            text += (" Das Bild wurde noch abgedunkelt gespeichert, sein Original wird geschätzt; für die beste "
+                     "Qualität neu erzeugen („Bild entfernen“, dann „Fehlende Bilder“).")
+        self.lb_bgdim.setText(text)
 
     def _view_slots(self):
         """Slots of the list: the shared topic slots plus the fillers of the language shown."""
@@ -1670,8 +1676,8 @@ class MainWindow(QMainWindow):
             return
         self._shown_key = s.key
         e = self.project.entry(s.key)
-        note = (" · Original, im PDF abgedunkelt (Buch → Hintergrund-Helligkeit)"
-                if s.kind == "background" and background.is_raw(self.project) else "")
+        note = (" · im PDF angepasst (Buch → Hintergrund-Helligkeit)"
+                if s.kind == "background" and self.project.has_image("background") else "")
         self.slot_title.setText(f"<b>{s.title}</b>  <span style='color:#888'>{KIND_LABEL[s.kind]} · {s.key}{note}</span>")
         self.slot_prompt.setPlainText(e.get("prompt", ""))
         self.chk_include_style.setChecked(e.get("include_style", True))
