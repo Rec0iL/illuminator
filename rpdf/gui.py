@@ -564,7 +564,15 @@ class MainWindow(QMainWindow):
         self.btn_build.clicked.connect(lambda: self.run_build())
         self.btn_all.clicked.connect(self.run_all)
         self.btn_cancel.clicked.connect(lambda: self.job and self.job.cancel())
-        for w in (self.btn_plan, self.chk_overwrite, self.btn_images, self.btn_images_all,
+        self.sp_count = QSpinBox()
+        self.sp_count.setRange(1, 8)
+        self.sp_count.setPrefix("Bilder pro Platz: ")
+        self.sp_count.setToolTip(
+            "So viele Bilder entstehen pro Platz bei „Fehlende Bilder“, „Alle Bilder neu“ und „Generieren & "
+            "speichern“. Alle bleiben als Varianten erhalten und lassen sich unter dem großen Bild auswählen. Ist die "
+            "Bildkontrolle an, nimmt das Buch das erste Bild, das die KI gut findet; findet sie keins gut, folgt die "
+            "gewohnte Korrektur. Ohne Bildkontrolle nimmt das Buch das erste Bild.")
+        for w in (self.btn_plan, self.chk_overwrite, self.btn_images, self.btn_images_all, self.sp_count,
                   self.btn_check, self.btn_build, self.btn_all):
             bar.addWidget(w)
         bar.addWidget(self.progress, 1)
@@ -597,7 +605,7 @@ class MainWindow(QMainWindow):
                                self.btn_refine, self.btn_accept, self.btn_check, self.btn_check_one,
                                self.btn_analyse, self.btn_cover_auto, self.btn_remove, self.btn_redo_seed,
                                self.btn_redo_prompt, self.btn_palettes] + self.review_buttons + self.compress_buttons \
-            + self.lang_buttons
+            + self.lang_buttons + self.variant_buttons
 
     def _scroll(self, widget):
         s = QScrollArea()
@@ -1055,6 +1063,42 @@ class MainWindow(QMainWindow):
         self.preview_banner.setAlignment(Qt.AlignCenter)
         self.preview_banner.hide()
         v.addWidget(self.preview_banner)
+        self.variant_list = QListWidget()
+        self.variant_list.setViewMode(QListWidget.IconMode)
+        self.variant_list.setFlow(QListWidget.LeftToRight)
+        self.variant_list.setWrapping(False)
+        self.variant_list.setMovement(QListWidget.Static)
+        self.variant_list.setIconSize(QSize(TW * 3 // 4, TH * 3 // 4))
+        self.variant_list.setSpacing(4)
+        self.variant_list.setFixedHeight(112)
+        self.variant_list.setToolTip("Alle Bilder, die für diesen Platz erzeugt wurden. Klick zeigt das Bild groß, "
+                                     "„Diese Variante verwenden“ übernimmt es ins Buch.")
+        self.variant_list.currentRowChanged.connect(self._on_variant_row)
+        v.addWidget(self.variant_list)
+        self.lb_variant = QLabel()
+        self.lb_variant.setWordWrap(True)
+        self.lb_variant.setTextFormat(Qt.RichText)
+        self.lb_variant.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        v.addWidget(self.lb_variant)
+        self.variant_row = QWidget()
+        vr = QHBoxLayout(self.variant_row)
+        vr.setContentsMargins(0, 0, 0, 0)
+        self.btn_use_variant = QPushButton("Diese Variante verwenden")
+        self.btn_use_variant.setObjectName("primary")
+        self.btn_use_variant.setToolTip("Das Buch benutzt dieses Bild. Prompt, Seed und Bearbeitungskette, mit denen "
+                                        "es entstand, kommen mit zurück; das bisherige Bild bleibt eine Variante.")
+        self.btn_check_variant = QPushButton("Variante prüfen (KI)")
+        self.btn_del_variant = QPushButton("Variante löschen")
+        self.btn_del_variant.setToolTip("Verschiebt das Bild nach .build/removed/. Die verwendete Variante lässt "
+                                        "sich nicht löschen.")
+        self.btn_use_variant.clicked.connect(self.use_variant)
+        self.btn_check_variant.clicked.connect(self.run_check_variant)
+        self.btn_del_variant.clicked.connect(self.delete_variant)
+        for b in (self.btn_use_variant, self.btn_check_variant, self.btn_del_variant):
+            vr.addWidget(b)
+        v.addWidget(self.variant_row)
+        self.variant_buttons = [self.btn_use_variant, self.btn_check_variant, self.btn_del_variant]
+        self._variants = []
         self.slot_title = QLabel()
         self.slot_title.setObjectName("slotTitle")
         self.slot_title.setWordWrap(True)
@@ -1214,6 +1258,7 @@ class MainWindow(QMainWindow):
         self.ed_style.setPlainText(c.get("style", ""))
         self.ed_negative.setPlainText(c.get("negative", ""))
         self.ed_world.setPlainText(c.get("world", ""))
+        self.sp_count.setValue(int(c.get("gen_count", 1)))
         self.ed_prompt_wish.setPlainText(c.get("prompt_wish", ""))
         self.cb_llm.setCurrentIndex(max(0, self.cb_llm.findData(c.get("llm", "agy"))))
         self._llm_shown = self.cb_llm.currentData()
@@ -1274,6 +1319,7 @@ class MainWindow(QMainWindow):
         c["negative"] = self.ed_negative.toPlainText().strip()
         c["world"] = self.ed_world.toPlainText().strip()
         c["prompt_wish"] = self.ed_prompt_wish.toPlainText().strip()
+        c["gen_count"] = self.sp_count.value()
         self._store_lang_edits()
         c["llm"] = self.cb_llm.currentData()
         c["claude" if c["llm"] == "claude" else "agy"]["model"] = self.cb_agy.currentText().strip()
@@ -1486,7 +1532,109 @@ class MainWindow(QMainWindow):
         self.slot_negative.setPlaceholderText("Negativ-Prompt nur für dieses Bild – leer = Standard aus „Stil“: "
                                               + self.project.config.get("negative", "")[:120])
         self._show_status(s.key)
+        self._fill_variants(s.key)
         self._set_preview(self.project.image_path(s.key))
+
+    def _fill_variants(self, key):
+        """The strip of all images made for this slot; the one the book uses is marked and selected."""
+        self._variants = self.project.variants(key) if key else []
+        self.variant_list.blockSignals(True)
+        self.variant_list.clear()
+        for n, v in enumerate(self._variants, 1):
+            qc = v.get("qc")
+            ai = ("KI ✓" if qc["fits"] else "KI ✗") if qc else "KI –"
+            item = QListWidgetItem(self._thumb(self.project.variant_path(key, v["id"])),
+                                   f"{'● ' if v['active'] else ''}Nr. {n}   {ai}")
+            item.setForeground(QColor(STATUS_COLOR[AI_OK] if qc and qc["fits"] else
+                                      STATUS_COLOR[AI_FLAG] if qc else "#cfd5de"))
+            tip = f"{v.get('created', '')} · {v.get('source', '')}" + (" · wird verwendet" if v["active"] else "")
+            tip += f"\n{v.get('prompt', '')}"
+            if qc and not qc["fits"]:
+                tip += "\nKI: " + "; ".join(qc["problems"])
+            item.setToolTip(tip)
+            self.variant_list.addItem(item)
+        active = next((i for i, v in enumerate(self._variants) if v["active"]), -1)
+        self.variant_list.setCurrentRow(active)
+        self.variant_list.blockSignals(False)
+        many = len(self._variants) > 1
+        self.variant_list.setVisible(many)
+        self.lb_variant.setVisible(many)
+        self.variant_row.setVisible(many)
+        self._describe_variant()
+        self._update_variant_buttons()
+
+    def _current_variant(self):
+        r = self.variant_list.currentRow()
+        return self._variants[r] if 0 <= r < len(self._variants) else None
+
+    def _describe_variant(self):
+        v = self._current_variant()
+        if not v:
+            self.lb_variant.clear()
+            return
+        n = self.variant_list.currentRow() + 1
+        qc = v.get("qc")
+        if not qc:
+            ai = "<span style='color:#6c7480'>KI-Prüfung: nicht geprüft</span>"
+        elif qc["fits"]:
+            ai = f"<span style='color:{STATUS_COLOR[AI_OK]}'>KI-Prüfung: passt</span>"
+        else:
+            ai = (f"<span style='color:{STATUS_COLOR[AI_FLAG]}'>KI-Prüfung: passt nicht – "
+                  + html.escape("; ".join(qc["problems"])) + "</span>")
+        state = "wird verwendet" if v["active"] else "nicht im Buch"
+        self.lb_variant.setText(f"<b>Variante {n}/{len(self._variants)}</b> · {state} · "
+                                f"{html.escape(v.get('source', ''))} {html.escape(v.get('created', ''))}<br>{ai}")
+
+    def _update_variant_buttons(self):
+        v = self._current_variant()
+        busy = bool(self.job and self.job.isRunning())
+        self.btn_use_variant.setEnabled(bool(v) and not v["active"] and not busy)
+        self.btn_del_variant.setEnabled(bool(v) and not v["active"] and not busy)
+        self.btn_check_variant.setEnabled(bool(v) and not busy)
+
+    def _on_variant_row(self, row):
+        v = self._current_variant()
+        key = getattr(self, "_shown_key", None)
+        if not (v and key):
+            return
+        self.preview_path = None
+        self.preview_banner.hide()
+        self._set_preview(self.project.variant_path(key, v["id"]))
+        self._describe_variant()
+        self._update_variant_buttons()
+
+    def use_variant(self):
+        s, v = self._current_slot(), self._current_variant()
+        if not (s and v) or v["active"]:
+            return
+        n = self.variant_list.currentRow() + 1
+        self.project.use_variant(s.key, v["id"])
+        self.project.save()
+        self._log(f"Variante {n} von „{s.title}“ wird verwendet (Prompt und Seed der Variante sind zurück).")
+        self._refresh_slots()
+
+    def delete_variant(self):
+        s, v = self._current_slot(), self._current_variant()
+        if not (s and v) or v["active"]:
+            return
+        if QMessageBox.question(self, "Variante löschen", "Dieses Bild aus den Varianten nehmen? Die Datei wandert "
+                                "nach .build/removed/.") != QMessageBox.Yes:
+            return
+        self.project.delete_variant(s.key, v["id"])
+        self.project.save_manifest()
+        self._fill_variants(s.key)
+        self._set_preview(self.project.image_path(s.key))
+
+    def run_check_variant(self):
+        s, v = self._current_slot(), self._current_variant()
+        if not (s and v and self._ready()):
+            return
+
+        def done(_):
+            self._fill_variants(s.key)
+            self._show_status(s.key)
+        self._start(lambda ctx: pipeline.check_variant(self.project, ctx, s.key, v["id"]), on_done=done,
+                    label=f"Die KI prüft eine Variante von „{s.title}“ …")
 
     def _show_status(self, key):
         """Review status of the shown slot: the badge plus the user's and the AI's verdict."""
@@ -1539,6 +1687,7 @@ class MainWindow(QMainWindow):
             if row == self.slot_list.currentRow() and not self.preview_path:
                 self._set_preview(self.project.image_path(key))
                 self._show_status(key)
+                self._fill_variants(key)
             break
         self._update_rejected_count()
 
@@ -1620,6 +1769,8 @@ class MainWindow(QMainWindow):
             # a job wrote the summary (first use of an LLM function): show it before the form is collected again
             self.ed_summary.setPlainText(self.project.config.get("summary", ""))
             self._summary_start = self.project.config.get("summary", "")
+        if hasattr(self, "variant_list"):
+            self._update_variant_buttons()
         if busy:
             self.progress.setRange(0, 0)
         else:
@@ -1652,7 +1803,8 @@ class MainWindow(QMainWindow):
 
     def _confirm_all_images(self):
         if QMessageBox.question(self, "Alle Bilder neu",
-                                "Alle Bilder mit neuem Seed neu generieren? Vorhandene Bilder werden ersetzt."
+                                "Alle Bilder mit neuem Seed neu generieren? Im Buch werden die vorhandenen Bilder ersetzt; "
+                                "sie bleiben als Varianten erhalten und lassen sich wieder auswählen."
                                 ) == QMessageBox.Yes:
             self.run_images(True)
 
@@ -1896,9 +2048,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Übernehmen", "Erst eine Vorschau erzeugen.")
             return
         self._collect()
-        shutil.copy(self.preview_path, self.project.image_path(s.key))
-        self.project.entry(s.key)["raw"] = True
-        self.project.reset_review(s.key)
+        vid, path = self.project.new_variant_path(s.key)
+        shutil.copy(self.preview_path, path)
+        e = self.project.entry(s.key)
+        self.project.register_variant(s.key, vid, "Vorschau", True, prompt=e.get("prompt", ""), seed=e.get("seed"),
+                                      raw=True)
         self.project.save()
         self._log(f"Übernommen: {s.title}")
         self._refresh_slots()

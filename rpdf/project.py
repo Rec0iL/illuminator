@@ -3,6 +3,8 @@ import copy
 import json
 import random
 import re
+import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +52,7 @@ DEFAULTS = {
                 "text, letters, signature, logo, deformed, extra limbs, lowres",
     "world": "",                   # short genre/setting summary written by the planner
     "prompt_wish": "",             # user instruction taken into every image prompt (and the image check)
+    "gen_count": 1,                # images made per slot in one go (all are kept as variants to choose from)
     "summary": "",                 # short summary of the book, written on the first LLM use (see summarize())
     "translations": [],            # more languages: [{lang, source, output, title, ..., chapter_level}]
     "llm": "agy",                  # prompt generator and image judge: agy | claude (Claude Code CLI)
@@ -344,11 +347,14 @@ class Project:
             del self.manifest[key]
 
     def trash_image(self, key):
-        """Move an image out of images/ into .build/removed/ (nothing is deleted). True if there was one."""
-        import time
+        """Move an image out of images/ into .build/removed/ (nothing is deleted). True if there was one.
+        It stays among the slot's variants, so it can still be picked again."""
         path = self.image_path(key)
         if not path.exists():
             return False
+        self.archive_active(key)
+        self._stash_active(key)
+        self.entry(key).pop("active_variant", None)
         trash = self.build_dir / "removed"
         trash.mkdir(parents=True, exist_ok=True)
         path.replace(trash / f"{key}-{time.strftime('%Y%m%d-%H%M%S')}{path.suffix}")
@@ -492,6 +498,131 @@ class Project:
         e.pop("qc", None)
         e.pop("review", None)
 
+    # ---------- variants ----------
+    # Every image an engine makes is kept: variants/<key>/<id>.jpg plus a record in the slot's manifest entry
+    # ("variants": [{id, created, source, prompt, seed, interaction_id, qc, ...}]). images/<key>.jpg is the
+    # one the book uses (the "active" variant, entry["active_variant"]); picking another variant copies it there
+    # and brings back the prompt, seed and edit chain it was made with.
+    def variants_dir(self, key):
+        return self.root / "variants" / key
+
+    def variant_path(self, key, vid):
+        return self.variants_dir(key) / f"{vid}.jpg"
+
+    def active_variant(self, key):
+        e = self.manifest.get(key, {})
+        return e.get("active_variant", "") if self.has_image(key) else ""
+
+    def variant(self, key, vid):
+        """The stored record of a variant (qc and review of the active one are live in the entry)."""
+        rec = next((v for v in self.manifest.get(key, {}).get("variants", []) if v["id"] == vid), None)
+        if rec is not None and vid == self.active_variant(key):
+            e = self.manifest[key]
+            rec = {**rec, "qc": e.get("qc"), "review": e.get("review", "")}
+        return rec
+
+    def variants(self, key):
+        """All variants whose file exists, oldest first: [{id, active, ...}]."""
+        active = self.active_variant(key)
+        out = []
+        for rec in self.manifest.get(key, {}).get("variants", []):
+            if self.variant_path(key, rec["id"]).exists():
+                out.append({**self.variant(key, rec["id"]), "active": rec["id"] == active})
+        return out
+
+    def new_variant_path(self, key):
+        vid = str(int(time.time() * 1000))
+        while self.variant_path(key, vid).exists():
+            vid = str(int(vid) + 1)
+        self.variants_dir(key).mkdir(parents=True, exist_ok=True)
+        return vid, self.variant_path(key, vid)
+
+    def archive_active(self, key):
+        """Make sure the image the book uses right now is among the variants (images from before variants
+        existed, or a file that was copied in by hand) so that replacing it never loses it."""
+        if not self.has_image(key):
+            return
+        e = self.entry(key)
+        av = e.get("active_variant")
+        if av and self.variant_path(key, av).exists():
+            return
+        vid, path = self.new_variant_path(key)
+        shutil.copy(self.image_path(key), path)
+        e.setdefault("variants", []).append({
+            "id": vid, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "source": "vorher",
+            "prompt": e.get("prompt", ""), "seed": e.get("seed"), "interaction_id": e.get("interaction_id"),
+            "qc": e.get("qc"), "review": e.get("review", ""), "raw": e.get("raw", False)})
+        e["active_variant"] = vid
+
+    def _stash_active(self, key):
+        """Write the verdicts that live in the entry back to the active variant before another one takes over."""
+        e = self.entry(key)
+        rec = next((v for v in e.get("variants", []) if v["id"] == e.get("active_variant")), None)
+        if rec is not None and self.has_image(key):
+            rec["qc"], rec["review"] = e.get("qc"), e.get("review", "")
+
+    def _activate(self, key, rec):
+        e = self.entry(key)
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.variant_path(key, rec["id"]), self.image_path(key))
+        e["active_variant"] = rec["id"]
+        for field in ("prompt", "seed"):
+            if rec.get(field) not in (None, ""):
+                e[field] = rec[field]
+        for field in ("interaction_id", "raw"):
+            if rec.get(field):
+                e[field] = rec[field]
+            else:
+                e.pop(field, None)
+        for field in ("qc", "review"):
+            if rec.get(field):
+                e[field] = rec[field]
+            else:
+                e.pop(field, None)
+
+    def register_variant(self, key, vid, source="gen", activate=True, **meta):
+        """Record the image file new_variant_path() handed out. With activate it replaces the image of the book
+        (the previous one stays a variant)."""
+        e = self.entry(key)
+        self.archive_active(key)
+        rec = {"id": vid, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "source": source, "qc": None,
+               "review": "", **meta}
+        if activate:
+            self._stash_active(key)
+        e.setdefault("variants", []).append(rec)
+        if activate:
+            self._activate(key, rec)
+        return rec
+
+    def use_variant(self, key, vid):
+        """The book uses this variant from now on; its prompt, seed and edit chain come back with it."""
+        rec = next((v for v in self.entry(key).get("variants", []) if v["id"] == vid), None)
+        if rec is None or not self.variant_path(key, vid).exists():
+            raise FileNotFoundError("Diese Variante gibt es nicht mehr.")
+        self.archive_active(key)
+        self._stash_active(key)
+        self._activate(key, rec)
+
+    def set_variant_qc(self, key, vid, qc):
+        """AI check result for one variant (the active one lives in the entry like it always did)."""
+        if vid == self.active_variant(key):
+            self.entry(key)["qc"] = qc
+            return
+        rec = next(v for v in self.entry(key).get("variants", []) if v["id"] == vid)
+        rec["qc"] = qc
+
+    def delete_variant(self, key, vid):
+        """Take a variant away (its file moves to .build/removed/). The active one cannot be deleted."""
+        if vid == self.active_variant(key):
+            raise ValueError("Die verwendete Variante lässt sich nicht löschen – erst eine andere verwenden.")
+        e = self.entry(key)
+        e["variants"] = [v for v in e.get("variants", []) if v["id"] != vid]
+        path = self.variant_path(key, vid)
+        if path.exists():
+            trash = self.build_dir / "removed"
+            trash.mkdir(parents=True, exist_ok=True)
+            path.replace(trash / f"{key}-{vid}.jpg")
+
     def full_prompt(self, key):
         e = self.entry(key)
         prompt = e.get("prompt", "").strip()
@@ -527,6 +658,8 @@ def rekey(project, mapping):
         if old == new or old not in project.manifest:
             continue
         project.manifest[new] = project.manifest.pop(old)
+        if project.variants_dir(old).exists() and not project.variants_dir(new).exists():
+            project.variants_dir(old).rename(project.variants_dir(new))
         if project.image_path(old).exists() and not project.image_path(new).exists():
             project.image_path(old).rename(project.image_path(new))
             moved.append((old, new))

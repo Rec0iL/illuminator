@@ -4,7 +4,7 @@
   python3 illuminator.py gui [PROJEKT]              Oberfläche starten
   python3 illuminator.py new PROJEKT QUELLE          Projekt anlegen (md, docx, pdf, txt), --type document für Readme/Tutorial
   python3 illuminator.py plan PROJEKT [--force]      Bild-Prompts mit der KI schreiben
-  python3 illuminator.py images PROJEKT [--all]      Fehlende (oder alle) Bilder generieren
+  python3 illuminator.py images PROJEKT [--all] [--count N]  Fehlende (oder alle) Bilder generieren, N Varianten pro Platz
   python3 illuminator.py edit PROJEKT KEY "Anweisung"  Bild per Gemini bearbeiten (Interaction-Kette)
   python3 illuminator.py check PROJEKT [--no-fix] [--strictness 1|2|3]
                                                       Bilder von der KI prüfen lassen (und unpassende neu machen)
@@ -39,6 +39,7 @@ def main():
     ap.add_argument("--all", action="store_true", help="images: auch vorhandene Bilder neu generieren")
     ap.add_argument("--wait-quota", action="store_true",
                     help="bei erschöpftem agy-Bildkontingent bis zum Reset warten und automatisch weitermachen")
+    ap.add_argument("--count", type=int, help="images: Bilder pro Platz (1-8), alle bleiben als Varianten erhalten")
     ap.add_argument("--no-fix", action="store_true", help="check: nur prüfen, nichts neu generieren")
     ap.add_argument("--lang", help="Sprachcode (add-lang, remove-lang, strip-images; build: nur diese Sprache)")
     ap.add_argument("--keep-images", action="store_true", help="add-lang: Bilder des Dokuments übernehmen")
@@ -90,7 +91,7 @@ def run_command(args, ap, ctx):
     if args.command in ("plan", "all"):
         pipeline.plan(p, ctx, force=args.force)
     if args.command in ("images", "all"):
-        pipeline.images(p, ctx, regenerate=args.all)
+        pipeline.images(p, ctx, regenerate=args.all, count=args.count)
     if args.command == "edit":
         if not (args.source and args.instruction):
             ap.error("edit PROJEKT KEY \"Anweisung\"")

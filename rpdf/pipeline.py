@@ -262,8 +262,18 @@ def replan_one(project, key, hint="", ctx=None):
     return prompt
 
 
-def images(project, ctx, keys=None, regenerate=False, new_seed=False):
-    """Generate images. By default only slots without an image file."""
+def gen_count(project):
+    """How many images one slot gets per run (setting "gen_count", 1 … 8)."""
+    try:
+        return max(1, min(8, int(project.config.get("gen_count", 1))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def images(project, ctx, keys=None, regenerate=False, new_seed=False, count=None):
+    """Generate images. By default only slots without an image file. With count > 1 every slot gets that many
+    images in one go; all are kept as variants to choose from (see Project.variants)."""
+    count = gen_count(project) if count is None else max(1, int(count))
     if keys is None:
         _detect(project, ctx)
     slots = project.sync_manifest(project.all_slots())
@@ -286,13 +296,54 @@ def images(project, ctx, keys=None, regenerate=False, new_seed=False):
         e = project.entry(s.key)
         if new_seed:
             e["seed"] = random.randint(1, 2**31 - 1)
-        ctx.log(f"[{i + 1}/{len(todo)}] {s.title}")
+        ctx.log(f"[{i + 1}/{len(todo)}] {s.title}" + (f" – {count} Bilder" if count > 1 else ""))
+        if count > 1:
+            _generate_batch(project, client, cfg, s, ctx, count)
+            continue
         _generate(project, client, cfg, s, ctx)
         if qc.get("enabled"):
             _check_and_fix(project, client, cfg, s, ctx, fix=qc.get("auto_fix", True),
                            rounds=int(qc.get("rounds", 1)), radical=bool(qc.get("radical")),
                            strictness=qc_strictness(project))
     ctx.progress(len(todo), len(todo))
+
+
+def _generate_batch(project, client, cfg, slot, ctx, count):
+    """`count` images for one slot, all kept as variants. The first is the one the book uses, unless the image
+    check (when on) finds a later one that fits. If the check is on and none of them fits, the usual correction
+    follows (edits or new prompt, as set up under Engine) and its results are variants too."""
+    qc = project.config.get("qc", {})
+    e = project.entry(slot.key)
+    vids = []
+    for n in range(count):
+        ctx.check()
+        if n:
+            e["seed"] = random.randint(1, 2**31 - 1)     # ComfyUI: another image; agy and Gemini ignore seeds
+        ctx.log(f"    Bild {n + 1}/{count}")
+        vids.append(_generate(project, client, cfg, slot, ctx, activate=(n == 0)))
+    chosen = vids[0]
+    if qc.get("enabled"):
+        model, strictness = project.config["agy"].get("model") or None, qc_strictness(project)
+        fits = []
+        for n, vid in enumerate(vids):
+            ctx.check()
+            result = _judge(project, slot, model, strictness, vid)
+            ctx.log(f"    Bildkontrolle Bild {n + 1}: " + ("passt" if result["fits"]
+                    else "passt nicht – " + "; ".join(result["problems"])))
+            if result["fits"]:
+                fits.append(vid)
+        if fits:
+            chosen = fits[0]
+    project.use_variant(slot.key, chosen)      # the book shows the chosen one; its prompt and seed come back
+    project.save_manifest()
+    ctx.image_saved(slot.key)
+    if qc.get("enabled") and not fits:
+        ctx.log("    Keins der Bilder passt – Korrektur wie bei einem einzelnen Bild …")
+        _check_and_fix(project, client, cfg, slot, ctx, fix=qc.get("auto_fix", True),
+                       rounds=int(qc.get("rounds", 1)), radical=bool(qc.get("radical")),
+                       strictness=qc_strictness(project))
+    elif qc.get("enabled") and chosen != vids[0]:
+        ctx.log(f"    Bild {vids.index(chosen) + 1} passt und wird verwendet.")
 
 
 def redo_rejected(project, ctx, new_prompts=False):
@@ -341,15 +392,6 @@ def qc_strictness(project):
     return level if level in planner.STRICTNESS else planner.STRICTNESS_DEFAULT
 
 
-def _remember_interaction(entry, client):
-    """agy/Gemini: keep the interaction id so the image can be edited later (edit_image)."""
-    iid = getattr(client, "last_interaction_id", None)
-    if iid:
-        entry["interaction_id"] = iid
-    else:
-        entry.pop("interaction_id", None)
-
-
 def edit_image(project, key, instruction, ctx):
     """agy/Gemini: change an existing image with a text instruction (chained via previous_interaction_id;
     falls back to uploading the JPEG when no interaction id is stored)."""
@@ -367,11 +409,7 @@ def edit_image(project, key, instruction, ctx):
     ctx.log(f"Bearbeite {slot.title} ({'Interaction ' + prev[:12] + '…' if prev else 'lokale Datei'})")
     img = with_quota_wait(project, ctx, lambda: client.generate(
         req, cancelled=ctx.cancelled, previous_id=prev, image_path=None if prev else project.image_path(key)))
-    comfy.save_image(img, project.image_path(key), slot.kind)
-    e["raw"] = True      # stored as the engine made it (the page background is dimmed at build time)
-    _remember_interaction(e, client)
-    project.reset_review(key)
-    project.save_manifest()
+    _save_variant(project, client, slot, img, "bearbeitet", True)     # the unedited image stays a variant
     ctx.log(f"    gespeichert: {project.image_path(key).name}")
     ctx.image_saved(key)
 
@@ -391,18 +429,27 @@ def remove_images(project, keys):
     return removed
 
 
-def _generate(project, client, cfg, slot, ctx):
+def _save_variant(project, client, slot, img, source="gen", activate=True):
+    """Store a freshly made image as a variant of the slot; activate = the book uses it from now on. The
+    prompt, seed and the engine's edit chain id are kept with it. Returns the variant id."""
+    e = project.entry(slot.key)
+    vid, path = project.new_variant_path(slot.key)
+    comfy.save_image(img, path, slot.kind)      # stored as the engine made it (the page background is dimmed at build time)
+    project.register_variant(slot.key, vid, source, activate, prompt=e.get("prompt", ""), seed=e.get("seed"),
+                             interaction_id=getattr(client, "last_interaction_id", None), raw=True)
+    project.save_manifest()
+    return vid
+
+
+def _generate(project, client, cfg, slot, ctx, activate=True):
     e = project.entry(slot.key)
     w, h = size_for(slot)
     wf = type(client).build_workflow(cfg, project.full_prompt(slot.key), project.negative(slot.key), w, h, e["seed"])
     img = with_quota_wait(project, ctx, lambda: client.generate(wf, cancelled=ctx.cancelled))
-    comfy.save_image(img, project.image_path(slot.key), slot.kind)
-    e["raw"] = True
-    _remember_interaction(e, client)
-    project.reset_review(slot.key)
-    project.save_manifest()
-    ctx.log(f"    gespeichert: {project.image_path(slot.key).name}")
+    vid = _save_variant(project, client, slot, img, "gen", activate)
+    ctx.log(f"    gespeichert: {project.variant_path(slot.key, vid).name}" + ("" if activate else " (Variante)"))
     ctx.image_saved(slot.key)
+    return vid
 
 
 RADICAL_CONCEPTS = 3    # radical mode: up to 3 concepts ...
@@ -412,15 +459,31 @@ RADICAL_TRIES = 3       # ... with up to 3 images each (3x3)
 GEMINI_EDITS = 2    # agy/gemini: 1 generation + at most 2 edits of that image, then it stays as it is
 
 
-def _judge(project, slot, model, strictness):
-    """One AI check of the slot's image; the result goes into the manifest ("qc"), never into the
-    user's verdict ("review")."""
+def _judge(project, slot, model, strictness, vid=None):
+    """One AI check of the slot's image (or of one of its variants); the result goes into the manifest ("qc"),
+    never into the user's verdict ("review")."""
     e = project.entry(slot.key)
-    result = planner.check_image(project.image_path(slot.key), project.build_dir / "qc" / slot.key,
-                                 slot, e.get("prompt", ""), _world(project), model,
+    vid = vid or project.active_variant(slot.key)
+    rec = project.variant(slot.key, vid) if vid else None
+    path = project.variant_path(slot.key, vid) if rec else project.image_path(slot.key)
+    result = planner.check_image(path, project.build_dir / "qc" / slot.key,
+                                 slot, (rec or e).get("prompt", ""), _world(project), model,
                                  project.config.get("style", ""), _kind(project), strictness)
-    e["qc"] = {"fits": result["fits"], "problems": result["problems"]}
+    qc = {"fits": result["fits"], "problems": result["problems"]}
+    if rec:
+        project.set_variant_qc(slot.key, vid, qc)
+    else:
+        e["qc"] = qc
     project.save_manifest()
+    return result
+
+
+def check_variant(project, ctx, key, vid):
+    """AI check of one variant of a slot (also an image that is not in the book)."""
+    slot = project.slot(key)
+    ctx.log(f"Prüfe Variante von „{slot.title}“ …")
+    result = _judge(project, slot, project.config["agy"].get("model") or None, qc_strictness(project), vid)
+    ctx.log("    passt" if result["fits"] else "    passt nicht – " + "; ".join(result["problems"]))
     return result
 
 
